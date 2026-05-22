@@ -3,7 +3,20 @@
 * See https://github.com/janbredenbeek/QLTerm for latest version from the author
 * This should be assembled and linked using the GST/Quanta Assembler and Linker
 * (see http://www.dilwyn.me.uk/asm/index.html)
-
+*
+* This program is free software: you can redistribute it and/or modify
+* it under the terms of the GNU General Public License as published by
+* the Free Software Foundation, either version 3 of the License, or
+* (at your option) any later version.
+*
+* This program is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+* GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*
 * V2.0 -  20 April 1987
 * V2.30 - 16 July 1988
 * V2.31 - 23 July 1992
@@ -11,14 +24,20 @@
 * V2.33 - 27 September 1994
 * v2.34 - 28 October 2016
 * v2.35 - 09 November 2016
+* v3.00b1 - 22 May 2026
 
-         INCLUDE  WIN1_MACRO_LIB
-         INCLUDE  WIN1_QDOS_IN_MAC
-         INCLUDE  WIN3_QLTDEV_QLTERM_IN
+         INCLUDE  MACRO_LIB
+         INCLUDE  QDOS_IN_MAC
+         INCLUDE  MultiConfig02
+         INCLUDE  QLTERM_IN
+         INCLUDE  ASSERT_INC
 
-         XDEF     PRINTAUX,TXCHR_A,TXCHR,TXSTR,TERMBASE,T_WAIT,GETREPLY,MAINWINP
+         XDEF     PRINTAUX,TERMBASE,GETREPLY,MAINWINP,GETMENU,DEFRXBUF
 
-         XREF     SCRJOB,DOWNLOAD,UPLOAD,OPENFILE,GR_SET1
+         XREF     SERJOB,SCRJOB,DOWNLOAD,UPLOAD,OPENFILE,GR_SET1
+         XREF     TXCHR,TXCHR_A,TXSTR,RXCHAR,PUT_RXQ,T_WAIT
+
+* Print a message on the command window
 
 PRMSG    MACRO    A
 [.LAB]   LEA      .S.[.L],A1
@@ -30,12 +49,18 @@ PRMSG    MACRO    A
 
          SECTION  CODE
 
-TERMBASE JMP      START
+TERMBASE:
+         JMP      START
          DC.W     0
          DC.W     $4AFB
          STRING$  {'QLTERM'}
+
+* Old config section, retained for compatibility
+
+* !!! DO NOT CHANGE THE ORDER OF THESE BYTES!
+
 DEFBUFLN DC.W     32             FOR 32K BUFFER
-DEFMODEM DC.B     1              FOR "BUFFERED"
+DEFMODEM DC.B     1              ; not used anymore
 DEFBAUD  DC.B     4              FOR 2400 BAUD
 DEFPAR   DC.B     -1             FOR "NONE"
 DEFECHO  DC.B     -1             FOR "FULL DUPLEX"
@@ -43,7 +68,10 @@ DEFSCR   DC.B     1              FOR "ANSI TERMINAL"
 DEFCOLR  DC.B     -1             FOR "COLOUR AUTO"
 DEFCONLF DC.B     1              FOR "CONVERT LINEFEEDS"
 DEFCOOKD DC.B     1              FOR "COOKED LOG"
-DEFPORT  DC.B     2
+DEFPORT  DC.B     P_TELNET
+
+* !!! DO NOT CHANGE THE DS.B BETWEEN THE FOLLOWING ENTRIES!
+
 PORTNAME STRING$  'SER1I'
          DS.B     15
          STRING$  'SER1H'
@@ -53,96 +81,331 @@ PORTNAME STRING$  'SER1I'
          STRING$  'SER2H'
          DS.B     15
 
+CUST_CFG DC.W     48                ; Maximum length
+CUST_COM STRING$  'SER3'            ; Custom comms device
+         DCB.B    0,50-(*-CUST_COM)
+
+MDM_INIT DC.W     32
+         STRING$  {'ATZ|'}
+MDM_DPRE DC.W     32
+         STRING$  {'ATD'}
+MDM_DPST DC.W     32
+         STRING$  {'|'}
+MDM_HUP  DC.W     32
+         STRING$  {'~~+++~~ATH0|'}
          DS.W     0
 
-MAINWINP DC.B     2,1,0,7
-         DC.W     484,242,14,2
-CMDWINP  DC.B     2,1,0,7
-         DC.W     484,12,14,244
-GWINNAM  STRING$  'SCR_484X254A014X002'
-START    ADDA.L   A6,A5
-         ADDA.L   A4,A6
-         LEA      DEFBUFLN,A0
+* Telnet options to send when connecting
+
+teln_opt dc.w     topt_end-*-2
+         dc.b     IAC,T_DO,T_BINARY,IAC,T_WILL,T_BINARY,IAC,T_DO,T_ECHO,IAC,T_DO
+         dc.b     T_SUPGA,IAC,T_WILL,T_SUPGA,IAC,T_WILL,T_TERM,IAC,T_WILL,T_NAWS
+topt_end equ      *
+
+         ds.w     0
+
+CFG_VER  EQU      '3.00'
+
+* New CONFIG section
+
+        mkcfstart
+        mkcfhead {Window settings},{CFG_VER}
+        
+          mkcfitem 'QLT1',word,'X',WIN_TLX,,,\
+          {X Position of top left corner (0-511)},0,511
+
+          mkcfitem 'QLT2',word,'Y',WIN_TLY,,,\
+          {Y Position of top left corner (0-255)},0,255
+
+          mkcfitem 'QLT3',word,'W',WIN_WID,,,\
+          {Terminal window width in characters (80-255)},80,255
+          
+          mkcfitem 'QLT4',word,'H',WIN_HGT,,,\
+          {Terminal window height in characters (24-127)},24,127
+
+          mkcfitem 'QLT5',byte,'P',WIN_DPAP,,,\
+          {Default paper colour (0-255)},0,255
+
+          mkcfitem 'QLT6',byte,'I',WIN_DINK,,,\
+          {Default ink colour (0-255)},0,255
+
+          mkcfitem 'QLT7',byte,0,MAINWINP,,,\
+          {Border colour (0-255)},0,255
+
+         mkcfblend
+         
+         mkcfhead {Modem settings},{CFG_VER}
+
+          mkcfitem 'QLT9',code,'B',DEFBAUD,,,\
+          {Default baud rate}\
+          0,0,{NONE},1,1,{300},2,2,{600},3,3,{1200},4,4,{2400},5,5,{4800},\
+          6,6,{9600},7,7,{19200},8,8,{38400},9,9,{57600},10,A,{115200},11,B,{12H75}
+
+          mkcfitem 'QLTL',string,0,MDM_INIT,,,\
+          {Modem initialisation},cfs.sspc
+          
+          mkcfitem 'QLTM',string,0,MDM_DPRE,,,\
+          {Modem dial prefix},cfs.sspc
+          
+          mkcfitem 'QLTN',string,0,MDM_DPST,,,\
+          {Modem dial postfix},cfs.sspc
+          
+          mkcfitem 'QLTO',string,0,MDM_HUP,,,\
+          {Modem hang-up command},cfs.sspc
+          
+         mkcfblend
+
+         mkcfhead {Other settings},{CFG_VER}
+
+          mkcfitem 'QLTR',word,'D',DEFRXBUF,,,\
+          {Receive buffer size (KB)},0,128
+
+          mkcfitem 'QLT8',word,'D',DEFBUFLN,,,\
+          {Download buffer size (KB, not for RAMdisk)},0,64
+                    
+          mkcfitem 'QLTA',code,'E',DEFECHO,,,\
+          {Default Local Echo setting}\
+          -1,0,{Echo Off},0,1,{Echo On},1,L,{Local Only}
+          
+          mkcfitem 'QLTB',code,'T',DEFSCR,,,\
+          {Default terminal type}\
+          -1,S,{ASCII},0,V,{VT52},1,A,{VT100/ANSI}
+          
+          mkcfitem 'QLTC',code,'C',DEFCOLR,,,\
+          {Default colour display}\
+          -1,B,{Automatic},0,4,{4-colour},1,8,{8-colour}
+
+          mkcfitem 'QLTP',code,0,DEFENTER,,,\
+          {ENTER key sends}\
+          0,0,{CR},1,1,{LF},2,2,{CR+LF}
+
+          mkcfitem 'QLTQ',code,0,DEFDEL,,,\
+          {BACKSPACE key sends}\
+          0,0,{CTRL-H (8)},1,1,{DEL (127)}
+          
+          mkcfitem 'QLTD',code,0,DEFCONLF,,,\
+          {Default EOL conversion for Log & Transmit}\
+          0,N,{No},1,Y,{Yes}
+          
+          mkcfitem 'QLTE',code,0,DEFBELL,,,\
+          {Make sound on receiving BEL character},\
+          0,N,{No},1,Y,{Yes}
+          
+          mkcfitem 'QLTF',code,'L',DEFCOOKD,,,\
+          {Default logging}\
+          0,R,{Raw},1,C,{Cooked}
+          
+          mkcfitem 'QLTG',code,'S',DEFPORT,,,\
+          {Default communication device}\
+          0,0,{SER1I},1,1,{SER1H},2,2,{SER2I},3,3,{SER2H},4,4,{RAW TCP},5,5,{Telnet},6,6,{Custom}
+          
+          mkcfitem 'QLTH',string,0,CUST_CFG,,,\
+          {Custom communication device},cfs.sspc
+          
+          mkcfitem 'QLTI',byte,0,OPENMODE,,,\
+          {Mode for opening SER/TCP port},0,255
+          
+          mkcfitem 'QLTJ',code,0,DEFPROT,,,\
+          {Default file transfer protocol}\
+          0,X,{Xmodem},1,1,{Xmodem-1K},2,Y,{Ymodem},3,G,{Ymodem-G}
+          
+          mkcfitem 'QLTK',string,0,DLDIR_CF,,,\
+          {Download directory},cfs.sspc
+
+        mkcfblend
+        
+        mkcfend
+
+WIN_TLX  DC.W     14                ; Window top left corner X
+WIN_TLY  DC.W     2                 ; Window top left corner Y
+WIN_WID  DC.W     80                ; Window width in characters
+WIN_HGT  DC.W     24                ; Window height in characters
+DEFRXBUF DC.W     64                ; Receive buffer size
+DLDIR_CF DC.W     48                ; Maximum length
+         STRING$  'RAM2_'           ; Download directory
+         DCB.B    0,48+4-(*-DLDIR_CF)
+OPENMODE DC.B     1                 ; Mode to open custom comms device
+DEFPROT  DC.B     PROT_YMO          ; Default file transfer protocol
+DEFBELL  DC.B     1                 ; Make sound on receiving BEL
+DEFENTER DC.B     0                 ; char to send on ENTER key
+DEFDEL   DC.B     1                 ; 0: send ctrl-H (8), 1: send DEL (127)
+
+         DS.W     0                 ; Next block should be word-aligned!
+
+* These values used when configuring above geometry fails
+
+MAINWINP DC.B     2,1               ; Main window border colour & width
+WIN_DPAP DC.B     0                 ; Main window paper colour
+WIN_DINK DC.B     7                 ; Main window ink colour
+         DC.W     484,242,14,2      ; Main window size & position
+CMDWINP  DC.B     2,1,0,7           ; command/status window colours
+         DC.W     484,12,14,244     ; ... and size & position
+DEFGWIN  DC.B     0,0,0,7           ; Default window outline
+         DC.W     484,254,14,2
+; GWINNAM  STRING$  'SCR_484X254A014X002'
+START:   ADDA.L   A6,A5             ; A5 = end of data space
+         ADDA.L   A4,A6             ; A6 = start of data space
+         MOVE.L   A6,A0
+         MOVE.W   #VARS_END/4,D0
+CLR_VARS CLR.L    (A0)+             ; clear all variables
+         DBF      D0,CLR_VARS
+         LEA      DEFBUFLN,A0       ; default settings
          LEA      BUFLEN(A6),A1
-         MOVE.W   (A0)+,(A1)+    SET BUFFER LEN
-         MOVE.L   (A0)+,(A1)+    SET MODEM, BAUD, PARITY & ECHO
-         MOVE.L   (A0)+,(A1)+    SET SCREEN, COLOUR, LF & COOKED
-         MOVE.B   (A0)+,(A1)+    SET PORT
-         SF       REDIR(A6)
-         SF       USE_PIPE(A6)
-         MOVE.W   (A7)+,D0
-         BEQ.S    TSTCMD
-         ST       REDIR(A6)
-         MOVE.L   (A7),TSERIN(A6)
-         SUBQ.W   #2,D0
-         BGT.S    EX_ERR
-         BNE.S    SET_OUT
-         ADDQ.W   #4,A7
-         ST       USE_PIPE(A6)
-SET_OUT  MOVE.L   (A7)+,TSEROUT(A6)
-         SUBA.L   A4,A4
-         BRA.S    SET_STK
-TSTCMD   MOVE.L   A7,A4
-         TST.W    (A4)
-         BNE.S    SER_CMD
-         BSR      OPEN_SER
-         BNE.S    SER_FAIL
-         BRA.S    SET_STK
-SER_CMD  MOVE.L   A4,A0
-         MOVEQ    #-1,D1
-         MOVEQ    #0,D3
-         QDOS     IO.OPEN
-         MOVE.L   A0,TSERIN(A6)
-         MOVE.L   A0,TSEROUT(A6)
-         TST.L    D0
-         BEQ.S    SET_STK
-SER_FAIL SUBA.L   A0,A0
-         PRINT    {'Unable to open channel to '}
-         MOVE.L   A4,A1
-         MOVE.W   UT_MTEXT,A2
-         JSR      (A2)
-         MOVEQ    #LF,D1
-         QDOS     IO.SBYTE
-         BRA      QUIT2
+
+         ASSERT   BUFLEN,MODEMTYP-2,BAUD-3,PARITY-4,ECHOMOD-5
+         ASSERT   ECHOMOD,SCRMOD-1,COLRMOD-2,CONVLF-3,L_COOKED-4
+         ASSERT   L_COOKED,PORT-1
+
+         MOVE.W   (A0)+,(A1)+       ; SET DOWNLOAD BUFFER SIZE
+         MOVE.L   (A0)+,(A1)+       ; SET MODEM, BAUD, PARITY & ECHO
+         MOVE.L   (A0)+,(A1)+       ; SET SCREEN, COLOUR, LF & COOKED
+         MOVE.W   (A0)+,(A1)+       ; SET PORT
+         MOVE.B   DEFPROT(PC),XFERPROT(A6) ; Default xfer protocol
+         MOVE.B   DEFENTER(PC),ENTERKEY(A6) ; char to send on ENTER key
+         MOVE.B   DEFDEL(PC),DELKEY(A6) ; char to send on Backspace key
+         LEA      DLDIR_CF+2(PC),A1
+         MOVE.L   A1,DLDIR(A6)      ; default download directory
+         MOVE.L   2(A1),D1
+         ANDI.L   #$DFDFDFF8,D1
+         CMPI.L   #'RAM0',D1        ; is download dir on RAMdisk?
+         BEQ.S    SET_CHAN          ; no, leave buffer size as it is
+         CLR.W    BUFLEN(A6)        ; RAMdisk doesn't need buffering
+;         SF       REDIR(A6)
+;         SF       USE_PIPE(A6)
+SET_CHAN MOVEQ    #-1,D0
+         MOVE.L   D0,TSERIN(A6)     ; no channels yet
+         MOVE.L   D0,TSEROUT(A6)
+         MOVE.L   D0,LOGCHID(A6)
+         MOVE.W   (A7)+,D0          ; number of channels passed
+         BEQ.S    TSTCMD            ; zero, try command string
+         ST       REDIR(A6)         ; signal 'comms device redirected'
+         MOVE.L   (A7),TSERIN(A6)   ; set input channel
+         SUBQ.W   #2,D0             ; two or more passed?
+         BLT.S    SET_OUT           ; no, use same for output
+         BEQ.S    TWO_CHAN
+         SUBQ.W   #1,D0             ; three channels passed?
+         BGT.S    EX_ERR            ; error if more than three
+         ADDQ.W   #4,A7             ; step past input channel
+         MOVE.L   (A7),LOGCHID(A6)  ; second is for logging
+TWO_CHAN ADDQ.W   #4,A7             ; point to output channel
+         ST       USE_PIPE(A6)      ; signal 'piped input and output'
+SET_OUT  MOVE.L   (A7)+,TSEROUT(A6) ; set output channel
+         BRA.S    SETRCVBF           ; go ahead
+
 EX_ERR   SUBA.L   A0,A0
          PRINT    {'Too many files specified in EX/EW command',LF}
          BRA      QUIT2
-SET_STK  MOVE.L   A4,SERNAME(A6)
+
+TSTCMD   MOVE.L   A7,A4             ; A4 now points to command string
+         MOVE.W   (A4)+,D0          ; is it null?
+         BEQ.S    SETRCVBF          ; yes, skip it
+         LEA      COMNAME(A6),A0
+         MOVE.W   D0,(A0)+          ; set length
+COMM_CP  MOVE.W   (A4)+,(A0)+       ; copy comms device name
+         SUBQ.W   #2,D0             ; 2 bytes at a time
+         BGT      COMM_CP
+
+* Removed this, just print a warning when comms device cannot be opened
+         
+;SER_FAIL SUBA.L   A0,A0
+;         PRINT    {'Unable to open channel to '}
+;         MOVE.L   A4,A1
+;         MOVE.W   UT_MTEXT,A2
+;         JSR      (A2)
+;         MOVEQ    #LF,D1
+;         QDOS     IO.SBYTE
+;         BRA      QUIT2
+
+SETRCVBF MOVE.W   DEFRXBUF(PC),D1
+         MULU     #1024,D1
+         MOVEQ    #-1,D2
+         QDOS     MT.ALCHP          ; allocate receive queue
+         TST.L    D0
+         IF NE THEN
+            SUBA.L   A0,A0
+            PRINT    {'Cannot allocate receive buffer. Please configure a smaller buffer',LF}
+            BRA      QUIT2
+         ENDIF
+         MOVE.L   A0,RXQ_BASE(A6)   ; initialise queue pointer
+;         MOVE.L   A2,RXQ_HEAD(A6)
+;         MOVE.L   A2,RXQ_TAIL(A6)
+
+; The next instructions mimic the IO_QSET vector, but since Minerva needlessly
+; limits the size of queues to 32K bytes, we have to do it ourselves...
+; we do need a larger buffer because of TCP/IP windows and possible future
+; enhancements like a scroll-back buffer...
+
+         LEA      -$10(A0,D1.L),A1  ; end of queue (discount MT.ALCHP overhead)
+         MOVE.L   A0,A2
+         CLR.L    (A2)+             ; clear EOF flag / link to next
+         MOVE.L   A1,(A2)+          ; set q_end
+         ADDA.W   #Q_QUEUE,A0       ; find start of physical queue
+         MOVE.L   A0,(A2)+          ; set q_nxtin and q_nxtout
+         MOVE.L   A0,(A2)+
          MOVEQ    #-1,D1
          MOVEQ    #-1,D2
-         QDOS     MT.DMODE
+         QDOS     MT.DMODE          ; test MODE
          CMPI.B   #8,D1
          IF EQ THEN
             SUBA.L   A0,A0
-            PRINT    {'This program cannot be run in MODE 8',LF}
+            PRINT    {'Sorry, this program cannot be run in MODE 8',LF}
             BRA      QUIT2
          ENDIF
          TST.B    COLRMOD(A6)
-         BGE.S    OPEN_WIN          Pre-set colour mode, skip autodetect
-         CLR.B    COLRMOD(A6)       Assume Black & White
-         CMPI.B   #2,D1             Test for 2-colour mode (SMS)
+         BGE.S    OPEN_WIN          ; pre-set colour mode, skip autodetect
+         CLR.B    COLRMOD(A6)       ; assume Black & White
+         CMPI.B   #2,D1             ; test for 2-colour mode (SMS)
          BEQ.S    OPEN_WIN
-         ADDQ.B   #1,COLRMOD(A6)    We have at least 4 colours available
-         TST.B    D1                Zero means MODE 4
+         ADDQ.B   #1,COLRMOD(A6)    ; we have at least 4 colours available
+         TST.B    D1                ; zero means MODE 4
          BEQ.S    OPEN_WIN
-         ADDQ.B   #1,COLRMOD(A6)    We're lucky - more than 4 colours
-OPEN_WIN LEA      GWINNAM,A0        Open guard window for PE
-         MOVEQ    #-1,D1
-         MOVEQ    #0,D3
-         QDOS     IO.OPEN
+         ADDQ.B   #1,COLRMOD(A6)    ; we're lucky - more than 4 colours
+
+* Open windows
+
+OPEN_WIN: 
+         MOVE.L   WIN_TLX(PC),-(A7) ; stack window top left X & Y
+         MOVE.W   WIN_HGT(PC),D0
+         MULU     #10,D0            ; Get pixels (NB: fails with NTSC QLs!)
+         ADD.W    #10+4,D0          ; add status line height+border (4x 1 px)
+         MOVE.W   D0,-(A7)
+         MOVE.W   WIN_WID(PC),D0
+         MULU     #6,D0             ; Get width in pixels
+         ADDQ.W   #4,D0             ; add border (2x 2 px)
+         MOVE.W   D0,-(A7)
+         MOVE.L   DEFGWIN(PC),-(A7) ; Border colour, size, paper & strip
+OPEN_GWN 
+         MOVE.L   A7,A1             ; parameters for guard window
+         MOVE.W   UT_SCR,A2
+         JSR      (A2)              ; try opening guardian window
+         MOVE.L   D0,D3             ; error code
+         BEQ.S    GUARD_OK          ; OK, continue
+         CMPI.L   #ERR.OR,D3        ; was it 'Out of range'?
+         BNE      QUIT3             ; No, it's something serious...
+         MOVE.L   DEFGWIN+4(PC),4(A7) ; Use default window size
+         MOVE.L   DEFGWIN+8(PC),8(A7)
+         BRA      OPEN_GWN          ; Repeat open
+GUARD_OK
          MOVE.L   A0,GUARDWIN(A6)
-         MOVEQ    #-1,D3
-         QDOS     SD.CLEAR
-         LEA      MAINWINP,A1
+;         MOVEQ    #-1,D3
+;         QDOS     SD.CLEAR
+         MOVE.L   MAINWINP(PC),(A7) ; border, paper & ink
+         SUB.W    #12,6(A7)         ; subtract cmd window height
+         MOVE.L   A7,A1
          MOVE.W   UT_CON,A2
-         JSR      (A2)
-         MOVE.L   A0,MAINWIN(A6)
+         JSR      (A2)              ; open main window
+         MOVE.L   D0,D3
+         BNE      QUIT3             ; quit if any error
+         MOVE.L   A0,MAINWIN(A6)    ; store ID
+         MOVEQ    #-1,D3
+         LEA      WIN_COLS(A6),A1
+         QDOS     SD.CHENQ          ; record actual window geometry
          SUBA.L   A1,A1
          LEA      GR_SET1,A2        Set character set for hi-bit characters
          QDOS     SD.FOUNT
-         PRINT    {'QLTERM Version [version]  Release [.date]',LF,LF}
-*         PRINT    {'Beta test version; NOT for general distribution!',LF,LF}
-         PRINT    {'Copyright  1987-2016 by Jan Bredenbeek',LF,LF}
+         PRINT    {'QLTERM Version [version]  Build [.date]',LF,LF}
+         PRINT    {'Beta test version; please report bugs on github.com/SinclairQL/QLTerm/issues',LF,LF}
+         PRINT    {'Copyright  1987-2026 by Jan Bredenbeek',LF,LF}
          PRINT    {'Colour mode: '}
          TST.B    COLRMOD(A6)
          IF EQ THEN
@@ -155,111 +418,136 @@ OPEN_WIN LEA      GWINNAM,A0        Open guard window for PE
                PRINT    {'8-colour',LF}
             ENDIF
          ENDIF
-         LEA      CMDWINP,A1
+         MOVE.L   CMDWINP(PC),(A7)  ; border, paper & ink for cmdwin
+         MOVE.W   6(A7),10(A7)      ; cmd window comes under main window
+         ADDQ.W   #2,10(A7)         ; but allow for border
+         MOVE.W   #12,6(A7)         ; height = 1 char + border
+         MOVE.L   A7,A1
          MOVE.W   UT_CON,A2
          JSR      (A2)
-         MOVE.L   A0,CMDWIN(A6)
+         MOVE.L   D0,D3
+         BNE      QUIT3             ; quit if any error
+         MOVE.L   A0,CMDWIN(A6)     ; store channel ID
+         ADDA.W   #12,A7            ; clean up window params
          MOVEQ    #-1,D0
-         MOVE.L   D0,LOGCHID(A6)
-         MOVE.L   D0,SERJBID(A6)
-         SF       XOFFMOD(A6)
-         SF       DLMOD(A6)
-         SF       ESCMOD(A6)
-         SF       TXBUSY(A6)
-         SF       PARNUM(A6)
-         SF       CONECTED(A6)
-         SF       IN_EOF(A6)
-         LEA      RXQ(A6),A2
-         MOVE.L   A2,RXQ_BASE(A6)
-         MOVE.L   A2,RXQ_HEAD(A6)
-         MOVE.L   A2,RXQ_TAIL(A6)
-         ADDA.L   #RXQ_SIZE,A2
-         MOVE.L   A2,RXQ_TOP(A6)
+         MOVE.L   D0,SERJBID(A6)    ; no serial job yet
+;         SF       XOFFMOD(A6)       ; XON/XOFF status
+;         SF       DLMOD(A6)         ; download mode
+;         SF       ESCMOD(A6)        ; in ESC sequence
+;         SF       TXBUSY(A6)        ; TX busy
+;         SF       PARNUM(A6)        ; # of parameters expected
+;         SF       CONECTED(A6)      ; connected status
+;         SF       IN_EOF(A6)        ; EOF in input
+;         LEA      RXQ(A6),A2        ; RX queue
          MOVEQ    #-1,D1
          MOVEQ    #32,D2
-         QDOS     MT.PRIOR
+         QDOS     MT.PRIOR          ; give ourselves priority 32
          LEA      SCRJOB,A1
-         BSR      MAKE_JOB
+         BSR      MAKE_JOB          ; create screen update job
          MOVE.L   D1,SCRJBID(A6)
-         TST.B    REDIR(A6)
+         TST.B    REDIR(A6)         ; redirected input?
          IF EQ THEN
-            BSR      SETBAUD
+            BSR      SETBAUD        ; no, set baud rate
          ENDIF
-         TST.B    USE_PIPE(A6)
-         BNE.S    ACT_SCR
+         TST.B    USE_PIPE(A6)      ; piped input?
+         BNE.S    ACT_SCR           ; yes, no serial job needed
          LEA      SERJOB,A1
-         BSR      MAKE_JOB
+         BSR      MAKE_JOB          ; else, create it
          MOVE.L   D1,SERJBID(A6)
-         MOVEQ    #127,D2
-         MOVEQ    #0,D3
+         MOVEQ    #127,D2           ; use maximum priority, empty that
+         MOVEQ    #0,D3             ; serial buffer asap!
          QDOS     MT.ACTIV
+         BSR      OPEN_SER
 ACT_SCR  MOVE.L   SCRJBID(A6),D1
-         MOVEQ    #32,D2
+         MOVEQ    #32,D2            ; start the screen update job
          MOVEQ    #0,D3
          QDOS     MT.ACTIV
-MAIN_MSG BSR      STATUS
-         MOVE.L   MAINWIN(A6),A0
+MAIN_MSG BSR      STATUS            ; display status
+         MOVE.L   MAINWIN(A6),A0    ; get main window ID
          MOVEQ    #-1,D3
-         QDOS     SD.CURE
+         QDOS     SD.CURE           ; enable cursor
 
 * Main execution loop
 
-MAIN_LP  TST.B    IN_EOF(A6)
-         BNE.S    MAIN_EOF
-         MOVE.L   MAINWIN(A6),A0
+MAIN_LP: MOVE.L   MAINWIN(A6),A0
          MOVEQ    #0,D3
          QDOS     IO.FBYTE          Get keystroke, if any
          TST.L    D0
          BEQ.S    TST_KEY
          MOVEQ    #2,D3             If no key, wait 100 ms and retry
          BSR      T_WAIT
-         BRA      MAIN_LP
+         TST.B    IN_EOF(A6)        ; test EOF flag
+         BEQ      MAIN_LP           ; not EOF so loop back
 
-MAIN_EOF MOVEQ    #ERR.EF,D3        EOF in input detected
-         TST.B    REDIR(A6)
-         BNE      QUIT3             if redirected, commit suicide now
-         MOVE.L   TSERIN(A6),A0
-         QDOS     IO.CLOSE
-         MOVEQ    #-1,D1
-         MOVEQ    #0,D3
-         MOVE.L   SERNAME(A6),A0
-         QDOS     IO.OPEN
-         MOVE.L   D0,D3
-         BNE      QUIT3
-         MOVE.L   A0,TSERIN(A6)
-         MOVE.L   A0,TSEROUT(A6)
-         SF       IN_EOF(A6)
-         BRA      MAIN_LP
+MAIN_EOF MOVEQ    #ERR.EF,D3        ; EOF in input detected
+         TST.B    USE_PIPE(A6)
+         BNE      QUIT2             ; if redirected, commit suicide now
+         TST.W    TSERIN+2(A6)      ; input channel already closed?
+         BMI      MAIN_LP           ; yes, loop back
+         BSR      DC_CLOSE          ; close input channel
+         MOVE.L   MAINWIN(A6),A0
+         MOVE.B   WIN_DPAP(PC),D1   ; reset colours to default
+         QDOS     SD.SETPA
+         QDOS     SD.SETST
+         MOVE.B   WIN_DINK(PC),D1
+         QDOS     SD.SETIN
+         PRINT    {LF,LF,'*** Session disconnected by remote ***',LF,LF}
+;         MOVE.L   SERNAME(A6),A0
+;         MOVE.L   A0,D0             ; do we have a serial device?
+;         BEQ      QUIT2             ; no, quit
+;         QDOS     IO.OPEN           ; try reopening it
+;         MOVE.L   D0,D3
+;         BNE      QUIT3             ; no luck, exit
+;         MOVE.L   A0,TSERIN(A6)     ; store new channel ID
+;         MOVE.L   A0,TSEROUT(A6)
+;         SF       IN_EOF(A6)        ; clear flag
+         BRA      MAIN_MSG           ; loop back
 
 TST_KEY  CMPI.B   #F3,D1            F3 key pressed for Menu?
          BNE.S    KEY2
-         ST       DLMOD(A6)
+         ST       DLMOD(A6)         ; do not write data to the main window
          MOVE.L   MAINWIN(A6),A0
          MOVEQ    #-1,D3
-         QDOS     SD.CURS
-CMD_AGN  PRMSG    {'Buffer, Call, Download, Hangup, Interface, Log, Options, Quit, Transmit, Upload'}
-         QDOS     SD.CURE
-         QDOS     IO.FBYTE
-         MOVE.B   D1,D2
-         QDOS     SD.CURS
-         CMPI.B   #ESC,D2
-         BEQ.S    CMD_END
-         BCLR     #5,D2
+         QDOS     SD.CURS           ; disable cursor in main window
+CMD_AGN  PRMSG    {'Connect, Download, Hangup, Interface, Log, Options, Quit, Upload >'}
+         QDOS     SD.CURE           ; enable it for cmd window
+         QDOS     IO.FBYTE          ; get keypress
+         MOVE.B   D1,D2             ; save it
+         QDOS     SD.CURS           ; disable cursor again
+         CMPI.B   #ESC,D2           ; ESCape?
+         BEQ.S    CMD_END           ; yes, go back to main
+         BCLR     #5,D2             ; convert to uppercase
          LEA      CMDTBL-2,A2
 CMDLOOP  ADDQ.W   #2,A2
-         MOVE.W   (A2)+,D1
-         BEQ      CMD_AGN
-         CMP.B    D2,D1
-         BNE      CMDLOOP
-         QDOS     SD.CLEAR
-         ADDA.W   (A2),A2
-         JSR      (A2)
-CMD_END  SF       DLMOD(A6)
+         MOVE.W   (A2)+,D1          ; get entry for cmd letter
+         BEQ      CMD_AGN           ; end of table - loop back
+         CMP.B    D2,D1             ; do we have a match?
+         BNE      CMDLOOP           ; no, loop back
+         QDOS     SD.CLEAR          ; clear cmd window
+         ADDA.W   (A2),A2           ; find address of routine
+         JSR      (A2)              ; call it
+CMD_END  SF       DLMOD(A6)         ; return from cmd, enable terminal
          BRA      MAIN_MSG
 
 * 'Ordinary' key press - look for generic conversion first
 
 KEY2     LEA      K_GEN,A1
+         CMPI.B   #LF,D1            ; ENTER key
+         BNE.S    KEY_DEL
+         MOVE.B   ENTERKEY(A6),D0   ; get mode
+         BEQ.S    KEY2LOOP          ; 0 = send CR as per conversion table
+         SUBQ.B   #1,D0
+         BEQ.S    SENDKEY           ; 1 = send LF unchanged
+         LEA      CRLF_STR+1,A1     ; else, send CR+LF as string
+         BRA.S    CTLFOUND
+
+KEY_DEL  CMPI.B   #$C2,D1           ; DELETE (ctrl-left) ?
+         BNE.S    KEY2LOOP          ; no, skip
+         TST.B    DELKEY(A6)        ; DEL option?
+         BNE.S    KEY2LOOP          ; yes, convert to DEL
+         MOVEQ    #8,D1             ; else, send backspace
+         BRA.S    SENDKEY
+
 KEY2LOOP MOVE.W   (A1)+,D0
          BEQ.S    KEY3
          CMP.B    D1,D0
@@ -267,6 +555,8 @@ KEY2LOOP MOVE.W   (A1)+,D0
          MOVE.W   D0,D1
          LSR.W    #8,D1
          BRA.S    SENDKEY
+
+CRLF_STR STRING$  {CR,LF}
 
 * Depending on mode, do additional conversion
 
@@ -285,228 +575,13 @@ S_KTABLE MOVE.B   (A1)+,D0
          BRA      S_KTABLE
 CTLFOUND MOVEQ    #0,D2
          MOVE.B   (A1)+,D2          number of chars to send
-         BSR.S    TXSTR
+         JSR      TXSTR
          BRA      MAIN_LP
 
 * No more conversions needed - finally send character
 
-SENDKEY  BSR.S    TXCHR
+SENDKEY  JSR      TXCHR
          BRA      MAIN_LP
-
-* This code is added so that VT52/ANSI escape sequences are sent as one
-* string - needed for some Telnet systems
-* Send string: A1 pointer, D2 length
-
-TXSTR    TST.B    REDIR(A6)
-         BEQ.S    TXSTR_LP          .. but only if redirected I/O
-         TST.B    ECHOMOD(A6)
-         BGT.S    TXS_LOC           .. 'Local Only' mode
-         MOVE.L   TSEROUT(A6),A0
-         MOVEQ    #-1,D3
-         QDOS     IO.SSTRG
-         TST.B    ECHOMOD(A6)
-         BLT.S    TXS_RTS           Done if no local echo to do
-         SUBA.W   D2,A1             restore original A1
-TXS_LOC  MOVE.B   (A1)+,D1
-         BSR.S    PUT_RXQ           put char in RX queue for local echo
-         SUBQ.W   #1,D2
-         BGT      TXS_LOC
-TXS_RTS  RTS
-
-TXSTR_LP MOVE.B   (A1)+,D1          For serial I/O, just call TXCHR
-         BSR.S    TXCHR
-         SUBQ.W   #1,D2
-         BNE      TXSTR_LP
-         RTS
-
-SETPAR   MOVEQ    #0,D0
-         MOVE.B   PARITY(A6),D0
-         BLT.S    SP_END
-         ANDI.B   #$7F,D1
-         MOVE.B   PARTBL(PC,D0.W),D0
-         JSR      PARTBL(PC,D0.W)
-SP_END   RTS
-
-PARTBL   DC.B     SP_ODD-PARTBL
-         DC.B     SP_EVEN-PARTBL
-         DC.B     SP_MARK-PARTBL
-         DC.B     SP_SPACE-PARTBL
-
-SP_ODD   BSR.S    SP_EVEN
-         EORI.B   #$80,D1
-SP_SPACE RTS
-SP_EVEN  MOVEQ    #6,D0
-         MOVE.B   D1,D2
-SP_LOOP  ROR.B    #1,D1
-         EOR.B    D1,D2
-         DBF      D0,SP_LOOP
-         ROXL.B   #1,D2
-         ROXR.B   #1,D1
-         RTS
-SP_MARK  ORI.B    #$80,D1
-         RTS
-
-* Transmit a character, taking care of echo status
-
-TXCHR    MOVEQ    #-1,D3
-         TST.B    ECHOMOD(A6)
-         BLT.S    TXCHR_A           jump if ECHO OFF
-         BSR.S    PUT_RXQ           Otherwise, put char in terminal queue
-         TST.B    ECHOMOD(A6)
-         BEQ.S    TXCHR_A           Finished if 'Local Only', else xmit char
-         RTS
-
-* Put character in receive queue to be picked up by screen job
-
-PUT_RXQ  MOVEM.L  D1/A1,-(A7)
-         TRAP     #0
-         MOVE.L   RXQ_HEAD(A6),A1
-         MOVE.B   D1,(A1)+
-         CMPA.L   RXQ_TOP(A6),A1
-         BLO.S    PUTRXQ_2
-         MOVE.L   RXQ_BASE(A6),A1
-PUTRXQ_2 MOVE.L   A1,RXQ_HEAD(A6)
-         ANDI     #$DFFF,SR
-         MOVEM.L  (A7)+,D1/A1
-         RTS
-
-* Transmit character in D1, taking care of all transmit modes
-* On entry, D3 holds timeout - nonzero for 'wait until complete'
-
-TXCHR_A  MOVEM.L  D1-D3/A0-A3,-(A7)
-TXCHR_1  TAS      TXBUSY(A6)
-         BEQ.S    TXCHR_2
-         TST.B    11(A7)
-         BEQ.S    TXCHR_NC
-         BSR.S    PAUSE4
-         BRA      TXCHR_1
-TXCHR_2  MOVE.L   TSEROUT(A6),A0
-         BSR      SETPAR
-         BSR.S    TXSUB
-         SF       TXBUSY(A6)
-         MOVEQ    #0,D0
-         BRA.S    TXCHREND
-TXCHR_NC MOVEQ    #ERR.NC,D0
-TXCHREND MOVEM.L  (A7)+,D1-D3/A0-A3
-         TST.L    D0
-         RTS
-
-* Wait 4 frames (80 ms)
-
-PAUSE4   MOVEQ    #4,D3
-T_WAIT   MOVEM.L  D1/A0-A1,-(A7)
-         MOVEQ    #-1,D1
-         SUBA.L   A1,A1
-         QDOS     MT.SUSJB
-         MOVEM.L  (A7)+,D1/A0-A1
-         RTS
-
-* Subroutine to transmit char
-
-TXSUB    TST.B    MODEMTYP(A6)
-         BGT.S    TXSER3            MODEMTYP > 0 means 'buffered'
-         MOVE.B   BAUD(A6),D0
-         CMPI.B   #11,D0
-         BEQ.S    TXSER3            11 = 12H75 using Hermes (tx = 75 baud)
-         SUBQ.B   #8,D0
-         BGE.S    TXMODAPT          8-10: Modaptor or Miracle Qmodem
-TXSER3   MOVEQ    #0,D3             No tricky hardware - send plain serial I/O
-         MOVE.B   D1,D2             save byte for later
-         QDOS     IO.SBYTE
-         TST.L    D0
-         BEQ.S    TXSER3_R
-         MOVE.B   D2,D1             if 'not complete', wait 80 ms and try again
-         BSR      PAUSE4
-         BRA      TXSER3
-TXSER3_R RTS
-
-* This code deals with the Modapter and Miracle Systems Qmodem in 1200/75 mode
-* D0 holds 0 for 12M75 (Modapter), 1 for 12P75 (Qmodem) and 12S75 (direct).
-* For each 2 bits of data, 3 bytes are sent at 1200 bps (i.e. 33 bits).
-* This is 16 times (+ 1 bit) the rate at 75 baud.
-* The electronics in the Modaptor/Qmodem do a bit of smoothing the signal so
-* in the end it (hopefully) looks like a 'real' 75 bps signal.
-* If you have to stick to 1200/75 and don't have these hardware, you can use 
-* 12S75 to generate the 75 bps by software (NOT recommended).
-
-TXMODAPT ANDI.W   #$00FF,D1
-         ORI.W    #$0100,D1
-         LSL.W    #1,D1             Insert stop bit '1' and start bit '0'
-         LEA      MODAPTBL,A3
-         SUBQ.B   #1,D0
-         BGT.S    TXDIRECT          If 12S75, go to software processed TxD
-         BLT.S    TXM_1
-         LEA      QMODTBL,A3        Modapter and Qmodem require different code
-TXM_1    SUBA.W   #16,A7
-         MOVE.L   A7,A1             We need a 15 byte buffer (rounded)
-TXMOD_LP MOVEQ    #3,D0             Each byte is 5 times 3 bytes to be sent
-         AND.B    D1,D0             (including start- and stopbit)
-         LEA      (A3,D0.W),A2
-         ADD.W    D0,D0
-         ADDA.W   D0,A2             Index into the table and copy 3 bytes
-         MOVE.B   (A2)+,(A1)+
-         MOVE.B   (A2)+,(A1)+
-         MOVE.B   (A2)+,(A1)+
-         LSR.W    #2,D1             Shift data to get next 2 bits in LSB
-         BNE      TXMOD_LP
-         MOVEQ    #15,D2
-         MOVE.L   A7,A1
-TXMOD_TX MOVEQ    #0,D3
-         QDOS     IO.SSTRG          Now send the 15 bytes
-         SUB.W    D1,D2
-         BEQ.S    TXMOD_EN
-         BSR      PAUSE4
-         BRA      TXMOD_TX
-TXMOD_EN ADDA.W   #16,A7
-         RTS
-
-* Send at 75 bps by directly manipulating the TxD line
-* This is not recommended as it slows down the QL considerably, but might be
-* the only option if you need 1200/75 on a dumb modem.
-
-TXDIRECT MOVE.W   D1,D3
-         EORI.W   #$07FF,D3         Need to invert the data bits
-         QDOS     MT.INF
-         TRAP     #0
-         ORI.W    #$0700,SR
-         LEA      $18002,A1
-         LEA      $24+6(A0),A2      "Spare sysvar location"
-         MOVE.W   -(A2),-(A7)       But save contents first to be sure
-         MOVE.W   #$4E75,(A2)
-         MOVE.L   -(A2),-(A7)
-         MOVE.L   #$538066FC,(A2)   Wait loop followed by RTS
-         MOVE.L   #1990,D2          Timing constant
-         LEA      $A0(A0),A0        SV.TMOD
-         MOVEQ    #$67,D1
-         AND.B    (A0),D1
-         MOVE.B   PORT(A6),D0
-         LSR.B    #1,D0
-         LSL.B    #3,D0
-         OR.B     D0,D1
-         ADD.B    D1,D1
-TXD_LP   LSR.W    #1,D3
-         BEQ.S    TXD_END
-         MOVE.B   D1,D0
-         ROXR.B   #1,D0
-         MOVE.B   D0,(A1)
-         MOVE.L   D2,D0
-         JSR      (A2)              Execute the loop (in 'slow' RAM)
-         BRA      TXD_LP
-TXD_END  MOVE.B   (A0),(A1)
-         MOVE.L   (A7)+,(A2)+
-         MOVE.W   (A7)+,(A2)
-         ANDI.W   #$D8FF,SR
-         RTS
-
-QMODTBL  DC.B     $00,$00,$00
-         DC.B     $FF,$0F,$00
-         DC.B     $00,$F0,$FF
-         DC.B     $FF,$FF,$FF
-
-MODAPTBL DC.B     $FE,$9E,$FE
-         DC.B     $FF,$9F,$FE
-         DC.B     $FE,$DE,$FF
-         DC.B     $FF,$DF,$FF
 
 * General key conversion table
 * Each pair: second byte keyboard code, first byte replacement code
@@ -536,22 +611,22 @@ K_VT52   DC.B     $C0,2,ESC,'D'     Left
 
 * Cursor keys conversion for ANSI
 
-K_ANSI   DC.B     $FD,3,ESC,$5B,'Z'    CBT
-*         DC.B     9,3,ESC,$5B,'I'      CHT
-         DC.B     $C0,3,ESC,$5B,'D'    CUB
-         DC.B     $D8,3,ESC,$5B,'B'    CUD
-         DC.B     $C8,3,ESC,$5B,'C'    CUF
-         DC.B     $D0,3,ESC,$5B,'A'    CUU
-         DC.B     $C3,3,ESC,$5B,'M'    DL
-         DC.B     $CB,3,ESC,$5B,'K'    EL
-         DC.B     $CA,3,ESC,$5B,'@'    ICH
-         DC.B     $DA,3,ESC,$5B,'L'    IL
-         DC.B     $DC,3,ESC,$5B,'U'    NP
-         DC.B     $D4,3,ESC,$5B,'V'    PP
-         DC.B     $D9,3,ESC,$5B,'T'    SD
-         DC.B     $C5,4,ESC,$5B,' @'   SL
-         DC.B     $CD,4,ESC,$5B,' A'   SR
-         DC.B     $D1,3,ESC,$5B,'S'    SU
+K_ANSI   DC.B     $FD,3,ESC,$5B,'Z'    CBT Back tab
+;         DC.B     9,3,ESC,$5B,'I'      CHT Forward tab
+         DC.B     $C0,3,ESC,$5B,'D'    CUB Cursor back
+         DC.B     $D8,3,ESC,$5B,'B'    CUD Cursor down
+         DC.B     $C8,3,ESC,$5B,'C'    CUF Cursor forward
+         DC.B     $D0,3,ESC,$5B,'A'    CUU Cursor up
+         DC.B     $C3,3,ESC,$5B,'M'    DL Ctrl-Alt-Left
+         DC.B     $CB,3,ESC,$5B,'K'    EL Ctrl-Alt-Right
+         DC.B     $CA,3,ESC,$5B,'@'    ICH Ctrl-Right
+         DC.B     $DA,3,ESC,$5B,'L'    IL Ctrl-Down
+         DC.B     $DC,3,ESC,$5B,'U'    NP Shift-Down
+         DC.B     $D4,3,ESC,$5B,'V'    PP Shift-Up
+         DC.B     $D9,3,ESC,$5B,'T'    SD Alt-Down
+         DC.B     $C5,4,ESC,$5B,' @'   SL Shift-Alt-Left
+         DC.B     $CD,4,ESC,$5B,' A'   SR Shift-Alt-Right
+         DC.B     $D1,3,ESC,$5B,'S'    SU Alt-Up
          DC.B     0
 
 * Table of Commands (F3 menu)
@@ -594,6 +669,14 @@ PRINTAUX MOVE.L   CMDWIN(A6),A0
 STATUS   MOVE.L   CMDWIN(A6),A0
          MOVEQ    #-1,D3
          QDOS     SD.CLEAR
+         TST.B    CONECTED(A6)
+         IF NE THEN
+            LOAD$    {' Online |'},A1
+         ELSE
+            LOAD$    {' Offline |'},A1
+         ENDIF
+         MOVE.W   (A1)+,D2
+         QDOS     IO.SSTRG
          MOVE.B   ECHOMOD(A6),D1
          ADDQ.B   #1,D1
          LEA      ECHOMSG,A1
@@ -612,46 +695,48 @@ STATUS   MOVE.L   CMDWIN(A6),A0
          MOVE.B   COLRMOD(A6),D1
          LEA      COLRMSG,A1
          BSR.S    STA_ITEM
-         MOVEQ    #' ',D1
-         QDOS     IO.SBYTE
-         MOVE.L   SERNAME(A6),A1
-         MOVE.L   A1,D0
+         TST.B    REDIR(A6)         ; is comms channel redirected?
          IF EQ THEN
-            LOAD$    {'ReDir'},A1
+            MOVE.B   PORT(A6),D1    ; no, display standard device
+            LEA      PORTMSG,A1
+            BSR.S    STA_ITEM
+         ELSE
+            LOAD$    {' ReDir |'},A1 ; else, signal it
+            MOVE.W   (A1)+,D2
+            QDOS     IO.SSTRG
          ENDIF
-         MOVE.W   (A1)+,D2
-         QDOS     IO.SSTRG
-         MOVEQ    #' ',D1
-         QDOS     IO.SBYTE
-         MOVEQ    #'|',D1
-         QDOS     IO.SBYTE
          MOVE.B   BAUD(A6),D1
          LEA      BAUDMSG,A1
          BSR.S    STA_ITEM
-         MOVE.B   PARITY(A6),D1
-         ADDQ.B   #1,D1
-         LEA      PARITMSG,A1
-         BSR.S    STA_ITEM
-         MOVE.B   MODEMTYP(A6),D1
-         ADDQ.B   #1,D1
-         LEA      MODEMMSG,A1
-         BSR.S    STA_ITEM
+;         MOVE.B   PARITY(A6),D1
+;         ADDQ.B   #1,D1
+;         LEA      PARITMSG,A1
+;         BSR.S    STA_ITEM
+;         MOVE.B   MODEMTYP(A6),D1
+;         ADDQ.B   #1,D1
+;         LEA      MODEMMSG,A1
+;         BSR.S    STA_ITEM
          LOAD$    {' F3 - Menu'},A1
          MOVE.W   (A1)+,D2
          QDOS     IO.SSTRG
          RTS
 
-STA_ITEM ADDQ.L   #2,A1
-STA_LP   SUBQ.B   #1,D1
-         BLO.S    STA_OUT
-         MOVE.W   (A1)+,D0
+* Print item on status line
+* Entry: D1: item number (0-based) (s)
+*        A0: channel ID of status channel (p)
+*        A1: pointer to item list (p)
+
+STA_ITEM ADDQ.L   #2,A1             ; skipover count
+STA_LP   SUBQ.B   #1,D1             ; count down, item found?
+         BLO.S    STA_OUT           ; yes, print it
+         MOVE.W   (A1)+,D0          ; get string length
          ADDQ.W   #1,D0
-         ANDI.B   #$FE,D0
-         ADDA.W   D0,A1
+         ANDI.B   #$FE,D0           ; round up to next word
+         ADDA.W   D0,A1             ; skip it and loop back
          BRA      STA_LP
-STA_OUT  MOVE.W   (A1)+,D2
-         QDOS     IO.SSTRG
-         MOVEQ    #'|',D1
+STA_OUT  MOVE.W   (A1)+,D2          ; length of string
+         QDOS     IO.SSTRG          ; print it
+         MOVEQ    #'|',D1           ; followed by separator
          QDOS     IO.SBYTE
          RTS
 
@@ -680,66 +765,9 @@ MJOB_LP  MOVE.L   (A1)+,(A0)+       Now copy the name so job control utilities
          BGT      MJOB_LP
          RTS
 
-* Serial input job
-* This continually reads the serial port and put the data in the buffer
-* (Which is rather needed for the standard SER ports as their buffering sucks)
-* Also handles XON/XOFF handshake
-
-SERJOB   BRA.S    SERJB_LP
-         DS.L     1
-         DC.W     $4AFB
-         STRING$  {'QLTERM sub 2'}
-SERJB_LP MOVE.L   TSERIN(A6),A0     Serial input channel
-         TRAP     #0                Enter supervisor mode
-         MOVEQ    #0,D4
-         MOVE.L   RXQ_HEAD(A6),A1
-SJ_LP2   MOVE.L   RXQ_TOP(A6),D2
-         SUB.L    A1,D2             Get number of free bytes in queue
-         BGT.S    SJ_FETCH
-         ADD.L    A1,D2
-         MOVE.L   RXQ_BASE(A6),A1
-         SUB.L    A1,D2
-SJ_FETCH MOVEQ    #0,D3
-         QDOS     IO.FSTRG          Get string, at most D2 bytes
-         ADD.W    D1,D4
-         TST.L    D0
-         BEQ      SJ_LP2
-SJ_WAIT  MOVE.L   A1,RXQ_HEAD(A6)
-         SUBA.L   RXQ_TAIL(A6),A1
-         ANDI     #$DFFF,SR
-         TST.W    D4
-         BEQ.S    SERJB_ER
-         MOVE.L   RXQ_TOP(A6),D2
-         SUB.L    RXQ_BASE(A6),D2
-         MOVE.L   A1,D1
-         BEQ.S    SERJB_WT
-         BPL.S    SJ_POS
-         ADD.L    D2,D1
-SJ_POS   LSR.L    #1,D2
-         MOVE.L   D2,D0
-         LSR.L    #1,D0
-         ADD.L    D2,D0
-         CMP.L    D0,D1
-         BLT.S    SERJB_WT
-         TST.B    XOFFMOD(A6)
-         BNE.S    SERJB_WT
-         MOVEQ    #XOFF,D1
-         JSR      TXCHR_A
-         BNE.S    SERJB_WT
-         ST       XOFFMOD(A6)
-         BRA.S    SERJB_WT
-SERJB_ER ADDQ.L   #1,D0
-         BEQ.S    SERJB_WT
-         CMPI.L   #ERR.EF+1,D0
-         BNE.S    SERJB_WT
-         TAS      IN_EOF(A6)
-SERJB_WT MOVEQ    #1,D3
-         BSR      T_WAIT
-         BRA      SERJB_LP
-
 * Get menu input
 * Entry: A1 points to menu table, D1 item number (0-based)
-* Exit: D1 = updated item number
+* Exit: D0 0=OK, <>0 cancelled, D1 = updated item number
 
 GETMENU  MOVEM.L  D2-D7/A0-A3,-(A7)
          MOVE.W   (A1)+,D5          NUMBER OF ITEMS
@@ -775,6 +803,8 @@ GM_LOOP  MOVE.B   CMDWINP+3,D1
          QDOS     IO.FBYTE
          CMPI.B   #LF,D1
          BEQ.S    GM_END
+         CMPI.B   #ESC,D1
+         BEQ.S    GM_NC
          MOVE.B   D1,-(A7)
          BSR.S    GM_ITEM
          MOVE.B   (A7)+,D1
@@ -792,8 +822,10 @@ GM_LEFT  SUBQ.W   #1,D7
          MOVE.W   D5,D7
          SUBQ.W   #1,D7
          BRA      GM_LOOP
+GM_NC    MOVEQ    #-1,D0
 GM_END   MOVE.W   D7,D1
          MOVEM.L  (A7)+,D2-D7/A0-A3
+         TST.L    D0
          RTS
 GM_ITEM  MOVE.L   A3,A1
          MOVE.W   D7,D4
@@ -851,176 +883,142 @@ SETBUFLP LEA      TXMODBUF(A6),A1
          JSR      (A2)
          MOVE.L   (A7)+,A6
          MOVE.W   (A7)+,D1
-         BLE.S    SETBF_ER
+         BLT.S    SETBF_ER
          TST.L    D0
          BEQ.S    SETBF_OK
 SETBF_ER PRMSG    {'Invalid input, enter again: '}
          BRA      SETBUFLP
 SETBF_OK MOVE.W   D1,BUFLEN(A6)
-         RTS
+SC_END   RTS
 
-ACTIVE   MOVEQ    #$20,D0
-         BRA.S    ACTIV2
-QMDISCON QDOS     MT.INF
+* Send modem command (A1)
+
+SENDCMD: MOVE.W   (A1)+,D2
+SC_LOOP  SUBQ.W   #1,D2
+         BLT.S    SC_END
+         MOVE.B   (A1)+,D1          Get next char
+         CMPI.B   #'|',D1           Replace pipe char with CR
+         BNE.S    SC_NOPIP
+         MOVEQ    #CR,D1
+         BRA.S    SC_SEND
+SC_NOPIP CMPI.B   #'\',D1           Replace backslash with LF
+         BEQ.S    SC_LF
+         CMPI.B   #'~',D1
+         BNE.S    SC_SEND
+         MOVEQ    #25,D3            and tilde char with .5 secs pause
+         BRA.S    SC_PAUSE
+SC_LF    MOVEQ    #LF,D1
+SC_SEND  MOVE.L   A1,-(A7)
+         MOVE.L   TSEROUT(A6),A0
+         MOVEQ    #-1,D3
+         QDOS     IO.SBYTE
+         MOVE.L   (A7)+,A1
+         BRA      SC_LOOP
+SC_PAUSE JSR      T_WAIT
+         BRA      SC_LOOP
+
+* Disconnect
+
+DISCON:  TST.B    USE_PIPE(A6)
+         BNE.S    DC_RTS            ; Don't close pipe channels!
+         TST.B    IN_EOF(A6)        ; EOF in input?
+         BEQ.S    DC_CLOSE          ; yes, always close
+         CMPI.B   #P_TCP,PORT(A6)   ; using TCP_IP?
+         BGE.S    DC_CLOSE          ; yes, close
+         LEA      MDM_HUP+2(PC),A1
+         BSR      SENDCMD           ; send modem hangup command
          MOVEQ    #50,D3
-         MOVE.W   D3,$A6(A0)
-         BSR      ACTIVE
-         MOVEQ    #0,D3
-INACTIVE MOVEQ    #0,D0
-ACTIV2   OR.B     PORT(A6),D0
-         LSR.B    #1,D0
-         LSL.B    #3,D0
-         MOVEM.L  D0-D2/A0-A1,-(A7)
-         QDOS     MT.INF
-         MOVEQ    #$67,D0
-         AND.B    $A0(A0),D0
-         OR.B     3(A7),D0
-         MOVE.B   D0,$18002
-         SUBA.L   A1,A1
+         JSR      T_WAIT            ; and wait 1 second
+         BRA.S    DC_RTS
+
+DC_CLOSE MOVE.L   TSERIN(A6),A0
+         QDOS     IO.CLOSE          ; close I/O channel
          MOVEQ    #-1,D1
-         QDOS     MT.SUSJB
-         MOVEM.L  (A7)+,D0-D2/A0-A1
-ACT_RTS  RTS
+         MOVE.L   D1,TSERIN(A6)     ; and reset channel IDs
+         MOVE.L   D1,TSEROUT(A6)
+         MOVE.L   RXQ_BASE(A6),A2
+         MOVE.L   Q_NEXTIN(A2),Q_NXTOUT(A2) ; reset rx queue
+         SF       CONECTED(A6)
+DC_RTS   RTS
 
-* Disconnect Qmodem
+;ONLINE   TST.B    MODEMTYP(A6)
+;         BLT.S    QM_ONLIN
+;         BGT.S    SET_TX_R
+;         BSR.S    HI_FREQ
+;         CMPI.B   #1,BAUD(A6)
+;         BNE.S    M_ON1200
+;         BSR      T3.3
+;         BRA      T5
+;M_ON1200 BSR      T10
+;         BRA      T5
 
-DISCON   SF       CONECTED(A6)
-         TST.B    MODEMTYP(A6)
-         BLT      QMDISCON
-         BGT      ACT_RTS
-         BSR.S    HI_FREQ
-         BSR.S    T3.3
-         BSR.S    HI_FREQ
+* Connect to a phone number or IP address
 
-T5       MOVE.L   #$168,D3
-         MOVEQ    #0,D4
-         BRA.S    SET_TX
-T3.3     MOVE.L   #$1FE,D3
-         BRA.S    TX_HI
-T10      MOVE.L   #$834,D3
-TX_HI    MOVEQ    #$20,D4
-SET_TX   OR.B     PORT(A6),D4
-         LSR.B    #1,D4
-         LSL.B    #3,D4
-         QDOS     MT.INF
-         LEA      $A0(A0),A0
-         LEA      $18002,A1
-         TRAP     #0
-         ORI.W    #$0700,SR
-         MOVEQ    #$67,D0
-         AND.B    (A0),D0
-         OR.B     D4,D0
-         MOVE.B   D0,(A1)
-SET_TX_L SUBQ.L   #1,D3
-         BNE.S    SET_TX_L
-         MOVE.B   (A0),(A1)
-         ANDI.W   #$D8FF,SR
-SET_TX_R RTS
-
-ONLINE   TST.B    MODEMTYP(A6)
-         BLT.S    QM_ONLIN
-         BGT.S    SET_TX_R
-         BSR.S    HI_FREQ
-         CMPI.B   #1,BAUD(A6)
-         BNE.S    M_ON1200
-         BSR      T3.3
-         BRA      T5
-M_ON1200 BSR      T10
-         BRA      T5
-
-QM_ONLIN BSR.S    HI_FREQ
-         MOVEQ    #50,D3
-         BSR      INACTIVE
-         MOVEQ    #3,D3
-         BSR      ACTIVE
-         MOVEQ    #0,D3
-         BRA      INACTIVE
-
-HI_FREQ  QDOS     MT.INF
-         LEA      $A0(A0),A0
-         LEA      $18002,A1
-         TRAP     #0
-         ORI      #$0700,SR
-         MOVEQ    #$67,D0
-         AND.B    (A0),D0
-         MOVE.B   PORT(A6),D1
-         LSR.B    #1,D1
-         LSL.B    #3,D1
-         OR.B     D1,D0
-         MOVEQ    #$3F,D1
-         TST.B    MODEMTYP(A6)
-         BLT.S    TOGGLE_O
-         MOVEQ    #$4F,D1
-TOGGLE_O BCHG     #7,D0
-         MOVE.B   D0,(A1)
-         MOVEQ    #$0F,D2
-         REPEAT
-            SUBQ.L   #1,D2
-         UNTIL EQ
-         DBF      D1,TOGGLE_O
-         MOVE.B   (A0),(A1)
-         ANDI     #$D8FF,SR
-         RTS
-
-* Dial a number (works only on Qmodem)
-
-CALL     QDOS     MT.INF
-         LEA      $A6(A0),A4
-         BSR      DISCON
-         MOVE.L   SCRJBID(A6),D1
-         MOVEQ    #0,D2
-         QDOS     MT.PRIOR
-         QDOS     MT.RELJB
-         ST       TXBUSY(A6)
+CALL:    CMPI.B   #P_TCP,PORT(A6)
+         BLT.S    CALL_2
+         TST.B    CONECTED(A6)
+         BEQ.S    CALL_2
          MOVE.L   CMDWIN(A6),A0
-         PRINT    {'Enter telephone number or ENTER for direct connection: '}
-         LEA      TXMODBUF(A6),A1
-         MOVEQ    #32,D2
+         PRINT    {'You are still connected. Disconnect'}
+         BSR      GETREPLY          ; NE if N chosen
+         BNE      DC_RTS            ; do not disconnect
+         BSR      DISCON
+CALL_2   PRMSG    {'Enter phone number, host name or IP address: '}
+         LEA      TXMODBUF+2(A6),A1
+         MOVEQ    #36,D2
          QDOS     IO.FLINE
-         MOVE.W   #3000,(A4)
          SUBA.W   D1,A1
          SUBQ.W   #1,D1
-         BEQ.S    CONNECT
-         MOVE.W   #150,D3
-         BSR      ACTIVE
-         MOVE.L   A1,A2
-         PRMSG    {'Dialing: '}
-DIAL_LP  MOVE.B   (A2)+,D1
-         CMPI.B   #LF,D1
-         BEQ.S    CONNECT
-         MOVE.B   D1,D2
-         QDOS     IO.SBYTE
-         SUBI.B   #'0',D2
-         CMPI.B   #9,D2
-         BHI.S    D_NONUM
-         TST.B    D2
-         IF EQ THEN
-            MOVEQ    #10,D2
-         ENDIF
-         REPEAT
-            MOVEQ    #3,D3
-            BSR      INACTIVE
-            MOVEQ    #2,D3
-            BSR      ACTIVE
-            SUBQ.B   #1,D2
-         UNTIL EQ
-         MOVEQ    #40,D3
-         BRA.S    DIAL_WT
-D_NONUM  MOVEQ    #100,D3
-DIAL_WT  BSR      ACTIVE
-         BRA      DIAL_LP
-CONNECT  BSR      ONLINE
-         MOVEQ    #50,D3
-         BSR      T_WAIT
-         MOVE.L   RXQ_HEAD(A6),RXQ_TAIL(A6)
+         BEQ.S    CONNECT           ; empty input, connect right away
+         CMPI.B   #P_TCP,PORT(A6)
+         BGE.S    CALL_TCP
+         MOVE.W   D1,-(A1)          ; save length
+         LEA      MDM_DPRE+2(PC),A1
+         BSR      SENDCMD           ; pre-dial string ('ATD')
+         LEA      TXMODBUF(A6),A1
+         BSR      SENDCMD           ; send phone number
+         LEA      MDM_DPST+2(PC),A1
+         BSR      SENDCMD           ; post-dial string
+         MOVEQ    #0,D0
+         BRA.S    CALL_END          ; we'll assume
+CALL_TCP
+         LEA      COMNAME+2(A6),A0
+         MOVE.L   #'TCP_',(A0)+
+         SF       D2                ; signal 'no port number yet'
+CALL_LP  CMPI.B   #':',(A1)         ; port number specified?
+         BNE.S    CALL_CPY          ; not yet
+         ST       D2                ; yes
+CALL_CPY MOVE.B   (A1)+,(A0)+       ; copy IP address
+         SUBQ.W   #1,D1
+         BGT      CALL_LP
+         TST.B    D2                ; port number seen?
+         BNE.S    CALL_3            ; yes, do not add port
+         MOVE.B   #':',(A0)+
+         MOVE.B   #'2',(A0)+
+         MOVE.B   #'3',(A0)+        ; add ':23'
+CALL_3   MOVE.L   A0,D0
+         LEA      COMNAME+2(A6),A0
+         SUB.L    A0,D0             ; form length
+         MOVE.W   D0,-(A0)          ; store it
+
+CONNECT  BSR      OPEN_SER
+         BNE.S    CALL_END
+;         MOVE.L   RXQ_HEAD(A6),RXQ_TAIL(A6)
          SF       XOFFMOD(A6)
          SF       TXBUSY(A6)
-         MOVE.L   SCRJBID(A6),D1
-         MOVEQ    #32,D2
-         QDOS     MT.PRIOR
-         CLR.W    (A4)
-         ST       CONECTED(A6)
-         RTS
+         SF       IN_EOF(A6)
+         CMPI.B   #P_TELNET,PORT(A6)
+         BNE.S    CALL_END
+;         MOVEQ    #50,D3
+;         JSR      T_WAIT
+         LEA      TELN_OPT,A1       ; Telnet default options
+         MOVE.W   (A1)+,D2
+         MOVEQ    #-1,D3
+         QDOS     IO.SSTRG          ; don't escape IACs here!
+;         MOVE.L   SCRJBID(A6),D1
+;         MOVEQ    #32,D2
+;         QDOS     MT.PRIOR
+CALL_END RTS
 
 * Tables used for menu commands
 * Each table consists of number of entries(W) followed by entries (QDOS string)
@@ -1031,28 +1029,31 @@ ECHOMSG  DC.W     3
          STRING$  {' Local Only '}
 
 COLRMSG  DC.W     3
-         STRING$  {' B&W '}
+         STRING$  {' No colour '}
          STRING$  {' 4-Colour '}
          STRING$  {' 8-Colour '}
 
-PORTMSG  DC.W     4
+PORTMSG  DC.W     7
          STRING$  {' SER1I '}
          STRING$  {' SER1H '}
          STRING$  {' SER2I '}
          STRING$  {' SER2H '}
+         STRING$  {' Custom '}
+         STRING$  {' TCP '}
+         STRING$  {' Telnet '}
 
 BAUDMSG  DC.W     12
-         STRING$  {' 75 '}
+         STRING$  {' NONE '}        ; Dropped 75!
          STRING$  {' 300 '}
          STRING$  {' 600 '}
          STRING$  {' 1200 '}
          STRING$  {' 2400 '}
          STRING$  {' 4800 '}
          STRING$  {' 9600 '}
-         STRING$  {' 19200 '}
-         STRING$  {' 12M75 '}
-         STRING$  {' 12P75 '}
-         STRING$  {' 12S75 '}
+         STRING$  {' 19K2 '}
+         STRING$  {' 38K4 '}
+         STRING$  {' 57K6 '}
+         STRING$  {' 115K2 '}
          STRING$  {' 12H75 '}
 
 PARITMSG DC.W     5
@@ -1062,14 +1063,14 @@ PARITMSG DC.W     5
          STRING$  {' Mark '}
          STRING$  {' Space '}
 
-MODEMMSG DC.W     3
-         STRING$  {' QModem '}
-         STRING$  {' Modaptor '}
-         STRING$  {' Buffered '}
+; MODEMMSG DC.W     3
+;         STRING$  {' Serial '}
+;         STRING$  {' Telnet '}
+;         STRING$  {' Buffered '}
 
 * Baud rates (last entry is for 1200/75 using Hermes)
 
-BAUDTBL  DC.W     75,300,600,1200,2400,4800,9600,19200,1200,1200,1200,75
+BAUDTBL  DC.L     0,300,600,1200,2400,4800,9600,19200,38400,57600,115200,75
 
 * IPC command to check if Hermes present
 
@@ -1079,16 +1080,17 @@ IPC_CHKH DC.W     $0C02
 
 SETBAUD  MOVEQ    #0,D1
          MOVE.B   BAUD(A6),D1
-         ADD.W    D1,D1
-         MOVE.W   BAUDTBL(PC,D1.W),D1
+         BLE.S    SB_RTS            ; 'None'
+         LSL.W    #2,D1
+         MOVE.L   BAUDTBL(PC,D1.W),D1
          QDOS     MT.BAUD
-         CMPI.B   #11,BAUD(A6)      12H75?
-         BLO.S    SB_RTS
-         LEA      IPC_CHKH,A3       If 12H75, check if Hermes present
+         CMPI.B   #BAUD_HER,BAUD(A6) ; 12H75?
+         BLT.S    SB_RTS            ; No
+         LEA      IPC_CHKH,A3       ; if 12H75, check if Hermes present
          QDOS     MT.IPCOM
          SUBQ.B   #8,D1
          BNE.S    SB_RTS
-         MOVE.W   #$0200,-(A7)      Set Hermes receive baud rate to 1200
+         MOVE.W   #$0200,-(A7)      ; Set Hermes receive baud rate to 1200
          MOVE.L   #$00080D04,-(A7)
          MOVE.B   PORT(A6),D0
          LSR.B    #1,D0
@@ -1100,69 +1102,87 @@ SETBAUD  MOVEQ    #0,D1
          ADDA.W   #10,A7
 SB_RTS   RTS
 
-INTERFAC TST.B    REDIR(A6)
-         IF EQ THEN
-            MOVE.L   TSERIN(A6),A0
-            QDOS     IO.CLOSE
-            MOVE.L   CMDWIN(A6),A0
-         ENDIF
+INTERFAC:
          PRINT    {'Transmit Mode: '}
          MOVE.B   ECHOMOD(A6),D1
          ADDQ.B   #1,D1
          LEA      ECHOMSG,A1
          BSR      GETMENU
+         BNE      SB_RTS
          SUBQ.B   #1,D1
          MOVE.B   D1,ECHOMOD(A6)
-         PRMSG    {'Modem Type: '}
-         MOVE.B   MODEMTYP(A6),D1
-         ADDQ.B   #1,D1
-         LEA      MODEMMSG,A1
-         BSR      GETMENU
-         SUBQ.B   #1,D1
-         MOVE.B   D1,MODEMTYP(A6)
+;         PRMSG    {'Modem Type: '}
+;         MOVE.B   MODEMTYP(A6),D1
+;         ADDQ.B   #1,D1
+;         LEA      MODEMMSG,A1
+;         BSR      GETMENU
+;         SUBQ.B   #1,D1
+;         MOVE.B   D1,MODEMTYP(A6)
          TST.B    REDIR(A6)
          BNE.S    IF_BAUD
          PRMSG    {'Port: '}
          MOVE.B   PORT(A6),D1
-         TST.B    MODEMTYP(A6)
-         IF LE THEN
-            MOVEQ    #2,D1
-         ENDIF
+;         TST.B    MODEMTYP(A6)
+;         IF LE THEN
+;            MOVEQ    #2,D1
+;         ENDIF
          LEA      PORTMSG,A1
          BSR      GETMENU
+         BNE      SB_RTS
          MOVE.B   D1,PORT(A6)
-IF_BAUD  PRMSG    {'Baud: '}
+         BSR      DC_CLOSE
+IF_BAUD  CMPI.B   #P_TCP,PORT(A6)
+         BGE.S    OPEN_SER
+         PRMSG    {'Baud: '}
          LEA      BAUDMSG,A1
          MOVE.B   BAUD(A6),D1
-         MOVE.B   MODEMTYP(A6),D0
-         IF LT THEN
-            MOVEQ    #9,D1
-         ENDIF
+;         MOVE.B   MODEMTYP(A6),D0
+;         IF LT THEN
+;            MOVEQ    #9,D1
+;         ENDIF
          BSR      GETMENU
          MOVE.B   D1,BAUD(A6)
          BSR      SETBAUD
-         PRMSG    {'Parity: '}
-         MOVE.B   PARITY(A6),D1
-         ADDQ.B   #1,D1
-         LEA      PARITMSG,A1
-         BSR      GETMENU
-         SUBQ.B   #1,D1
-         MOVE.B   D1,PARITY(A6)
-         TST.B    REDIR(A6)
-         BNE.S    IF_END
-OPEN_SER LEA      PORTNAME,A0
+;         PRMSG    {'Parity: '}
+;         MOVE.B   PARITY(A6),D1
+;         ADDQ.B   #1,D1
+;         LEA      PARITMSG,A1
+;         BSR      GETMENU
+;         SUBQ.B   #1,D1
+;         MOVE.B   D1,PARITY(A6)
+OPEN_SER TST.B    USE_PIPE(A6)
+         BNE.S    IF_CONN           ; Do not open or close piped chans!
+         LEA      COMNAME(A6),A0
+         TST.W    (A0)              ; comm channel already set?
+         BNE.S    OPN_SER2          ; yes, skip
+         LEA      PORTNAME,A0
          MOVEQ    #0,D0
          MOVE.B   PORT(A6),D0
          MULU     #22,D0
          ADDA.W   D0,A0
-         MOVE.L   A0,A4
-         MOVE.L   A4,SERNAME(A6)
+         CMPI.W   #P_CUSTOM*22,D0   ; check for custom port number
+         BLT.S    OPN_SER2
+         BGT.S    IF_END            ; do not open TCP now
+         ADDQ.L   #2,A0             ; skipover config maxlength word
+OPN_SER2 MOVE.L   A0,SERNAME(A6)    ; set pointer
          MOVEQ    #-1,D1
          MOVEQ    #0,D3
-         QDOS     IO.OPEN
-         MOVE.L   A0,TSERIN(A6)
+         MOVE.B   OPENMODE(PC),D3
+         QDOS     IO.OPEN           ; try open
+         MOVE.L   D0,D4
+         BEQ.S    IF_OK
+         MOVE.L   MAINWIN(A6),A0
+         PRINT    {LF,'*** Warning: Could not open comms device '}
+         MOVE.L   SERNAME(A6),A1
+         MOVE.W   UT_MTEXT,A2
+         JSR      (A2)
+         PRINT    {'. Try a different device.',LF,LF}
+         MOVE.L   D4,D0             ; restore error code
+         BRA.S    IF_END
+IF_OK    MOVE.L   A0,TSERIN(A6)     ; set proper channel ids
          MOVE.L   A0,TSEROUT(A6)
-         TST.L    D0
+IF_CONN  ST       CONECTED(A6)
+         MOVEQ    #0,D0             ; exit with zero flag set
 IF_END   RTS
 
 LOG      TST.W    LOGCHID+2(A6)
@@ -1185,23 +1205,37 @@ SCRNMSG  DC.W     3
          STRING$  {' ASCII '}
          STRING$  {' VT52 '}
          STRING$  {' ANSI '}
+
+ENTERMSG DC.W     3
+         STRING$  {' CR '}
+         STRING$  {' LF '}
+         STRING$  {' CR+LF '}
+
+DELMSG   DC.W     2
+         STRING$  {' CTRL-H (8) '}
+         STRING$  {' DEL (127) '}
+
 LOGMSG   DC.W     2
          STRING$  {' RAW '}
          STRING$  {' COOKED '}
+
 CONVLFMS DC.W     2
          STRING$  {' NO '}
          STRING$  {' YES '}
+
 OPTIONS  PRINT    {'Terminal Emulation: '}
          MOVE.B   SCRMOD(A6),D1
          ADDQ.B   #1,D1
          LEA      SCRNMSG,A1
          BSR      GETMENU
+         BNE      OPT_RTS
          SUBQ.B   #1,D1
          MOVE.B   D1,SCRMOD(A6)
          PRMSG    {'Colour: '}
          MOVE.B   COLRMOD(A6),D1
          LEA      COLRMSG,A1
          BSR      GETMENU
+         BNE      OPT_RTS
          MOVE.B   D1,COLRMOD(A6)
          IF EQ THEN
             MOVE.L   MAINWIN(A6),A0
@@ -1212,19 +1246,33 @@ OPTIONS  PRINT    {'Terminal Emulation: '}
             MOVE.B   MAINWINP+3,D1
             QDOS     SD.SETIN
          ENDIF
+         PRMSG    {'Character to send on ENTER key: '}
+         MOVE.B   ENTERKEY(A6),D1
+         LEA      ENTERMSG,A1
+         BSR      GETMENU
+         BNE.S    OPT_RTS
+         MOVE.B   D1,ENTERKEY(A6)
+         PRMSG    {'Character to send on Backspace key: '}
+         MOVE.B   DELKEY(A6),D1
+         LEA      DELMSG,A1
+         BSR      GETMENU
+         BNE.S    OPT_RTS
+         MOVE.B   D1,DELKEY(A6)
          PRMSG    {'Logging: '}
          MOVE.B   L_COOKED(A6),D1
          LEA      LOGMSG,A1
          BSR      GETMENU
+         BNE.S    OPT_RTS
          MOVE.B   D1,L_COOKED(A6)
          PRMSG    {'Convert CR/LF for LOG & TRANSMIT: '}
          MOVE.B   CONVLF(A6),D1
          LEA      CONVLFMS,A1
          BSR      GETMENU
+         BNE.S    OPT_RTS
          MOVE.B   D1,CONVLF(A6)
          SF       ESCMOD(A6)
          SF       PARNUM(A6)
-         RTS
+OPT_RTS  RTS
 
 TRANSMIT PRINT    {'Transmit - '}
          MOVEQ    #1,D4
