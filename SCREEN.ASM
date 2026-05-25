@@ -4,44 +4,66 @@
 * This should be assembled and linked using the GST/Quanta Macro Assembler and Linker
 * (see http://www.dilwyn.me.uk/asm/index.html)
 
+* This program is free software: you can redistribute it and/or modify
+* it under the terms of the GNU General Public License as published by
+* the Free Software Foundation, either version 3 of the License, or
+* (at your option) any later version.
+*
+* This program is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+* GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+
 * QLTERM SCREEN DRIVER JOB
 
-         INCLUDE  WIN1_MACRO_LIB
-         INCLUDE  WIN1_QDOS_IN_MAC
-         INCLUDE  WIN3_QLTDEV_QLTERM_IN
+         INCLUDE  MACRO_LIB
+         INCLUDE  QDOS_IN_MAC
+         INCLUDE  QLTERM_IN
 
          XDEF     SCRJOB
 
-         XREF     TXCHR,TXCHR_A,TXSTR,MAINWINP,T_WAIT
+         XREF     TXCHR,TXCHR_A,TXSTR,MAINWINP,T_WAIT,DEFRXBUF
 
          DATA     0
 
          SECTION  CODE
 
-SCRJOB   BRA.S    SCRJBLP1
-         DS.L     1
+SCRJOB   MOVE.L   RXQ_BASE(A6),A2	; A2 always points to RX queue
+	BRA.S    SCRJBLP1
          DC.W     $4AFB
-         STRING$  {'QLTERM sub 1'}
+         STRING$  {'QLTERM screen'}
 
 UPD_TAIL ADDQ.L   #1,A1
-         CMPA.L   RXQ_TOP(A6),A1
+         CMPA.L   Q_END(A2),A1
          BLO.S    UPDT_LO
-         MOVE.L   RXQ_BASE(A6),A1
-UPDT_LO  MOVE.L   A1,RXQ_TAIL(A6)
+         LEA      Q_QUEUE(A2),A1
+UPDT_LO  MOVE.L   A1,Q_NXTOUT(A2)
          RTS
 
 * Main loop entered here when queue is empty
 
 SCRJBLP1 TST.B    USE_PIPE(A6)      When not using pipes, skip
          BEQ.S    SET_CUR
-         MOVE.W   #RXQ_SIZE,D2
+         MOVE.L   Q_NEXTIN(A2),A1
+         MOVEQ    #-Q_QUEUE,D2
+         ADD.L    Q_END(A2),D2
+         SUB.L    A1,D2
+         IF LE THEN
+            ADD.L    A1,D2
+            LEA      Q_QUEUE(A2),A1
+         ENDIF
+         CMPI.L   #$7FFF,D2
+         IF GT THEN
+            MOVE.L   #$7FFF,D2
+         ENDIF
          MOVEQ    #0,D3
          MOVE.L   TSERIN(A6),A0
-         MOVE.L   RXQ_BASE(A6),A1
-         MOVE.L   A1,RXQ_HEAD(A6)
-         MOVE.L   A1,RXQ_TAIL(A6)   Initialise queue
          QDOS     IO.FSTRG          and try to fetch input from pipe
-         MOVE.L   A1,RXQ_HEAD(A6)
+         MOVE.L   A1,Q_NEXTIN(A2)
          TST.W    D1                Got any chars?
          BNE.S    SCRJBLP           no
          CMPI.L   #ERR.EF,D0
@@ -56,11 +78,11 @@ SET_CUR  MOVE.L   MAINWIN(A6),A0
             QDOS     SD.CURE
          ENDIF
          TST.B    USE_PIPE(A6)      Using pipes?
-         BNE.S    SCRJ_WT2          no
+         BNE.S    SCRJ_WT2          yes
 SCRJB_WT MOVEQ    #1,D3             Give up timeslice
          JSR      T_WAIT
-         MOVE.L   RXQ_TAIL(A6),A1
-         CMPA.L   RXQ_HEAD(A6),A1   Still no pending data?
+         MOVE.L   Q_NXTOUT(A2),A1
+         CMPA.L   Q_NEXTIN(A2),A1    Still no pending data?
          BEQ      SCRJB_WT          no, loop back
          BRA.S    SCRJB_GT          else, process it
 SCRJ_WT2 MOVE.L   TSERIN(A6),A0     When using pipes, simply wait until
@@ -70,22 +92,23 @@ SCRJ_WT2 MOVE.L   TSERIN(A6),A0     When using pipes, simply wait until
 
 * Main loop; check if more data available in input buffer
 
-SCRJBLP  MOVE.L   RXQ_TAIL(A6),A1
-         CMPA.L   RXQ_HEAD(A6),A1
+SCRJBLP  MOVE.L   Q_NXTOUT(A2),A1
+         CMPA.L   Q_NEXTIN(A2),A1
          BEQ      SCRJBLP1          If not, loop back
 SCRJB_GT MOVE.B   (A1),D1           Get first byte
-         TST.B    PARITY(A6)
-         IF GE THEN
-            ANDI.B   #$7F,D1        Strip off any parity
-         ENDIF
+;         TST.B    PARITY(A6)
+;         IF GE THEN
+;            ANDI.B   #$7F,D1        Strip off any parity
+;         ENDIF
          TST.B    XOFFMOD(A6)       Remote has been XOFF'ed?
          BEQ.S    TST_ESC           no
-         MOVE.L   RXQ_HEAD(A6),D2
+         MOVE.L   Q_NEXTIN(A2),D2
          SUB.L    A1,D2
          BGE.S    SCRJB_GE
-         ADD.L    RXQ_TOP(A6),D2
-         SUB.L    RXQ_BASE(A6),D2
-SCRJB_GE CMPI.W   #32,D2            D2 = free space in buffer
+         ADD.L    Q_END(A2),D2
+         SUB.L    A2,D2
+         SUBI.L   #Q_QUEUE,D2
+SCRJB_GE CMPI.L   #32,D2            D2 = free space in buffer
          BGT.S    TST_ESC           if more than 32, turn remote on again
          MOVE.B   D1,D2
          MOVEQ    #XON,D1
@@ -108,37 +131,38 @@ TST_ESC  MOVE.L   MAINWIN(A6),A0
          BHS.S    OUTCHR2           Jump if it's surely no ctrl code
 TST_ESC2 BSR      UPD_TAIL          Update the queue's ptr
          BSR.S    OUT_LOGB          Log it if necessary
-         LEA      CTRLTBL,A2
+         LEA      CTRLTBL,A4
          BSR      LOOKTBL           Now lookup the code
          BNE.S    OUTCHR            If not recognised, just print it
          QDOS     SD.DONL           Activate any pending NL's
-         JSR      (A2)              ...and do it!
+         JSR      (A4)              ...and do it!
          BRA      SCRJBLP
 OUTCHR   QDOS     IO.SBYTE          Print one character
          BRA      SCRJBLP
 
 * This loop deals with printable characters
 
-OUTCHR2  MOVE.L   A1,A2
-OUTCH_LP ADDQ.L   #1,A2
-         CMPA.L   RXQ_TOP(A6),A2
+OUTCHR2  MOVE.L   A1,A3
+OUTCH_LP ADDQ.L   #1,A3
+         CMPA.L   Q_END(A2),A3
          BHS.S    OUTCH_TP
-         CMPA.L   RXQ_HEAD(A6),A2
+         CMPA.L   Q_NEXTIN(A2),A3
          BEQ.S    OUTCH_EN
-         TST.B    PARITY(A6)
-         IF GE THEN
-            ANDI.B   #$7F,(A2)
-         ENDIF
-         MOVE.B   (A2),D1
+;         TST.B    PARITY(A6)
+;         IF GE THEN
+;            ANDI.B   #$7F,(A2)
+;         ENDIF
+         MOVE.B   (A3),D1
          CMPI.B   #$20,D1
          BLO.S    OUTCH_EN
          CMPI.B   #$7F,D1
          BNE      OUTCH_LP
          BRA.S    OUTCH_EN
-OUTCH_TP MOVE.L   RXQ_BASE(A6),RXQ_TAIL(A6)
+OUTCH_TP LEA      Q_QUEUE(A2),A3
+         MOVE.L   A3,Q_NXTOUT(A2)
          BRA.S    OUTCH_E2
-OUTCH_EN MOVE.L   A2,RXQ_TAIL(A6)
-OUTCH_E2 MOVE.L   A2,D2
+OUTCH_EN MOVE.L   A3,Q_NXTOUT(A2)
+OUTCH_E2 MOVE.L   A3,D2
          SUB.L    A1,D2
          BSR.S    OUT_LOGS
          QDOS     IO.SSTRG
@@ -186,28 +210,28 @@ GO_ESC   BSR      UPD_TAIL          first update queue tail
          BNE.S    GET_PAR           Get parameter (if any) in VT52 mode
          CMPI.B   #$5B,D1           ESC start of CSI (ANSI) sequence
          BEQ.S    EXPT_PAR          ...so start collecting parameters
-         LEA      ESCTBL,A2         Lookup any other escape char in VT52 table
+         LEA      ESCTBL,A4         Lookup any other escape char in VT52 table
          BSR      LOOKTBL
          BNE.S    ESC_END           If not found, reset and loop back
          LSR.W    #8,D2             MSB of D2 is # of parameters
          BEQ.S    GO_ESC1           if no parameters, just do it now
-         MOVE.L   A2,ESCRTN(A6)     Else, keep address of handler and set
+         MOVE.L   A4,ESCRTN(A6)     Else, keep address of handler and set
          MOVE.B   D2,PARNUM(A6)     number of expected parameters
          CLR.W    PB_PNT(A6)
          BRA      SCRJBLP           ... and loop back for next char
 
 * Handle parameters of VT52 sequence, just single character codes
 
-GET_PAR  MOVE.W   PB_PNT(A6),D0
+GET_PAR  LEA      PARBUF(A6),A3     Point A3 to start of parameter buffer
+         MOVE.W   PB_PNT(A6),D0
          ADDQ.W   #1,PB_PNT(A6)
-         MOVE.B   D1,PARBUF(A6,D0.W)
+         MOVE.B   D1,(A3,D0.W)
          SUBQ.B   #1,PARNUM(A6)     Any more parameters to expect?
          BNE      SCRJBLP           Yes, loop back
-         MOVE.L   ESCRTN(A6),A2
-         LEA      PARBUF(A6),A3     Point A3 to start of parameter buffer
+         MOVE.L   ESCRTN(A6),A4
 GO_ESC1  QDOS     SD.CURS
          QDOS     SD.DONL
-         JSR      (A2)              ... and jump to the handling routine
+         JSR      (A4)              ... and jump to the handling routine
 ESC_END  SF       ESCMOD(A6)        End of escape handling, reset flags
          SF       PARNUM(A6)
          BRA      SCRJBLP           and loop back
@@ -221,7 +245,7 @@ ESC_END  SF       ESCMOD(A6)        End of escape handling, reset flags
 
 * This code dealt with non-CSI ANSI codes and is probably obsolete...
 
-*         LEA      A_ESCTBL,A2
+*         LEA      A_ESCTBL,A4
 *         BSR.S    LOOKTBL
 *         BEQ      GO_ESC1
 *         BRA      ESC_END
@@ -234,17 +258,20 @@ EXPT_PAR ST       PARNUM(A6)        PARNUM=-1 to indicate 'undetermined'
 
 * Get next parameter
 
-A_GETPAR CMPI.B   #';',D1           Store any numbers separated by ';'
+A_GETPAR LEA      PARBUF(A6),A3     ; parbuf is now > 127 bytes from A6...
+         CMPI.B   #';',D1           ; Store any numbers separated by ';'
+         BEQ.S    ST_SEP
+         CMPI.B   #'?',D1           ; private sequence
          BEQ.S    ST_SEP
          CMPI.B   #'0',D1
          BLT.S    A_GO_RTN
-         CMPI.B   #'9',D1
+         CMPI.B   #'9',D1           ; store digits
          BGT.S    A_GO_RTN
-ST_SEP   MOVE.W   PB_PNT(A6),D0
+ST_SEP   MOVE.W   PB_PNT(A6),D0     ; get pointer in buffer
          CMPI.W   #79,D0
-         BGE.S    SCRJBL1           But do not allow buffer overflow...
-         MOVE.B   D1,PARBUF(A6,D0.W)
-         ADDQ.W   #1,PB_PNT(A6)
+         BGE.S    SCRJBL1           ; But do not allow buffer overflow...
+         MOVE.B   D1,(A3,D0.W)      ; store character
+         ADDQ.W   #1,PB_PNT(A6)     ; bump pointer
 SCRJBL1  BRA      SCRJBLP
 
 * Non-numeric or separator code, so must be command
@@ -252,29 +279,34 @@ SCRJBL1  BRA      SCRJBLP
 A_GO_RTN CMPI.B   #' ',D1
          BEQ.S    A_SPACE           ???
          MOVE.W   PB_PNT(A6),D0
-         CLR.B    PARBUF(A6,D0.W)
+         CLR.B    (A3,D0.W)         ; terminate parameter list
          TST.B    ESCMOD(A6)
          IF GT THEN
             ORI.B    #$80,D1        SL or SR, really needed?
          ENDIF
-         LEA      A_CMDTBL,A2
+         LEA      A_CMDTBL,A4
          BSR.S    LOOKTBL           Lookup code in ANSI table
          BNE      ESC_END
          MOVE.W   D2,D7
          LSR.W    #8,D7             D7 = # of parameters
-         LEA      PARBUF(A6),A3     A3 points to start
-         BSR      A_EVAL
-         BRA      GO_ESC1
+         LEA      PARBUF(A6),A3     ; parameter buffer
+         BSR      A_EVAL            ; evaluate 
+         BRA      GO_ESC1           ; and go to the handler routine
 A_SPACE  ANDI.B   #1,ESCMOD(A6)
          BRA      SCRJBL1
 
-LOOKTBL  MOVE.W   (A2)+,D2
+* Lookup code in a table
+* Table entries: code (word) followed by handler offset (word), end marker = 0
+* Call: D1.B code to lookup, A4 pointer to table
+* Return: D0 error code, D2.W table entry, A4 address of handler
+
+LOOKTBL  MOVE.W   (A4)+,D2
          BEQ.S    LKTBL_NF
          CMP.B    D1,D2
          BEQ.S    LKTBL_FN
-         ADDQ.W   #2,A2
+         ADDQ.W   #2,A4
          BRA      LOOKTBL
-LKTBL_FN ADDA.W   (A2),A2
+LKTBL_FN ADDA.W   (A4),A4
          MOVEQ    #0,D0
          RTS
 LKTBL_NF MOVEQ    #ERR.NF,D0
@@ -285,7 +317,7 @@ CTRLTBL  DC.W     7
          DC.W     8
          DC.W     BSP-*
          DC.W     9
-         DC.W     HTAB-*
+         DC.W     TAB8-*            ; changed to next TAB stop at 8!
          DC.W     10
          DC.W     LINEFD-*
          DC.W     11
@@ -301,6 +333,8 @@ CTRLTBL  DC.W     7
          DC.W     0
 
 * Escape code table for VT52
+
+* Each entry has # of params in MSB followed by code in LSB
 
 ESCTBL   DC.B     0,'A'
          DC.W     VT_UP-*
@@ -340,6 +374,7 @@ A_ESCTBL DC.B     0,'D'
          DC.W     0
 
 * CSI ANSI control codes
+* Each entry has # of params in MSB followed by code in LSB
 
 A_CMDTBL DC.B     1,'I'
          DC.W     CHT-*
@@ -425,8 +460,12 @@ SETPOS   MOVE.B   (A3)+,D2
          SUBI.B   #$20,D1
 SETPOS1  MOVEQ    #SD.POS&$FF,D0
          BRA.S    DOTRP
+TAB8     BSR      GETPOS            ; Get current position
+         ADDQ.W   #8,D1             ; advance to next tab stop
+         ANDI.W   #256-8,D1         ; .. which is a multiple of 8
+         BRA.S    SDTAB
 CRET     MOVEQ    #0,D1
-         MOVEQ    #SD.TAB&$FF,D0
+SDTAB    MOVEQ    #SD.TAB&$FF,D0
          BRA.S    DOTRP
 SETIN    MOVEQ    #SD.SETIN&$FF,D0
          BRA.S    SETCOL
@@ -463,26 +502,32 @@ DOTRP2   TRAP     #3
          ENDIF
          RTS
 
-A_EVAL   MOVEQ    #-1,D0
+* Evaluate parameters in ANSI CSI sequences
+* Call  : D7 default value, A3 pointer to buffer
+* Return: D0 error code, D7 value read, A3 updated
+
+A_EVAL   MOVEQ    #-1,D0            ; no parameter yet
          CMPI.B   #'0',(A3)
          BLT.S    EVAL_END
          CMPI.B   #'9',(A3)
-         BGT.S    EVAL_END
+         BGT.S    EVAL_END          ; return NC if no number
          MOVEQ    #0,D0
-         MOVEQ    #0,D7
+         MOVEQ    #0,D7             ; initialise value
 EVAL_LP  MOVE.B   (A3),D0
          SUBI.B   #'0',D0
-         CMPI.B   #9,D0
-         BHI.S    EVAL_END
-         ADDQ.W   #1,A3
+         CMPI.B   #9,D0             ; is next char a digit?
+         BHI.S    EVAL_END          ; no, stop
+         ADDQ.W   #1,A3             ; skip to next char
          MULU     #10,D7
-         ADD.W    D0,D7
+         ADD.W    D0,D7             ; include digit
          BRA      EVAL_LP
-EVAL_END CMPI.B   #';',(A3)
-         IF EQ THEN
-            ADDQ.W   #1,A3
-         ENDIF
-         TST.L    D0
+
+EVAL_END CMPI.B   #';',(A3)         ; separator?
+         BEQ.S    EVAL_NXT          ; yes, skip
+         CMPI.B   #'?',(A3)         ; NEW: test for private code '?'
+         BNE.S    EVAL_RT
+EVAL_NXT ADDQ.W   #1,A3             ; skip to next char
+EVAL_RT  TST.L    D0
          RTS
 
 * Get current cursor position (D1-D2) and window size (D4-D5)
@@ -602,16 +647,18 @@ ED_CLS   QDOS     SD.CLEAR
 SGR_AGN  BSR      A_EVAL
          BLT      SGR_RTS
 SGR      TST.B    D7
-         BEQ.S    RES_ALL
+         BEQ.S    RES_ALL           ; code 0: reset all
          SUBQ.B   #4,D7
          BNE.S    SGR_2
-         MOVEQ    #1,D1
+         MOVEQ    #1,D1             ; code 4: set underline
          QDOS     SD.SETUL
          BRA      SGR_AGN
-SGR_2    SUBQ.B   #3,D7
+SGR_2    SUBQ.B   #3,D7             ; code 7: reverse video
          BNE.S    SGR_3
+         MOVE.L   A2,-(A7)
          LEA      GETCOL,A2
          QDOS     SD.EXTOP
+         MOVE.L   (A7)+,A2
          MOVE.W   D1,D2
          QDOS     SD.SETST
          MOVE.W   D2,D1
@@ -623,23 +670,23 @@ SGR_2    SUBQ.B   #3,D7
 
 SGR_3    TST.B    COLRMOD(A6)
          BEQ      SGR_AGN           Ignore when in B&W mode
-         LEA      A_COLTB4,A2
+         LEA      A_COLTB4,A4
          CMPI.B   #1,COLRMOD(A6)    4-colour mode?
          IF NE THEN
-            LEA      A_COLTBL,A2    No, use 8-colour table
+            LEA      A_COLTBL,A4    No, use 8-colour table
          ENDIF
          SUBI.B   #30-7,D7
          CMPI.B   #7,D7
          BHI.S    SGR_4
-         MOVE.B   (A2,D7.W),D1
+         MOVE.B   (A4,D7.W),D1      ; codes 30-37
          QDOS     SD.SETIN          Set ink colour
          BRA      SGR_AGN
 SGR_4    SUBI.B   #10,D7
          CMPI.B   #7,D7
          BHI      SGR_AGN
-         MOVE.B   (A2,D7.W),D1
+         MOVE.B   (A4,D7.W),D1      ; codes 40-47
          QDOS     SD.SETPA          Set paper colour
-         MOVE.B   (A2,D7.W),D1
+         MOVE.B   (A4,D7.W),D1
          QDOS     SD.SETST          And strip colour
          BRA      SGR_AGN
 

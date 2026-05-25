@@ -6,6 +6,8 @@
 
 * QLTerm include file
 
+         NOLIST
+
 * Constants
 
 XON      EQU      $11
@@ -19,15 +21,57 @@ F3       EQU      $F0
 F4       EQU      $F4
 F5       EQU      $F8
 SOH      EQU      $01
+STX      EQU      $02
 EOT      EQU      $04
 ACK      EQU      $06
 NAK      EQU      $15
 CAN      EQU      $18
 C        EQU      $43
+IAC      EQU      $FF      Telnet IAC escape char
+T_DONT   equ      $fe      Telnet DONT command
+T_DO     equ      $fd      Telnet DO command
+T_WONT   equ      $fc      Telnet WONT command
+T_WILL   equ      $fb      Telnet WILL command
+T_SB     equ      $fa      Telnet suboption start
+T_SE     equ      $f0      Telnet suboption end
+T_BINARY equ      0        Telnet BINARY option
+T_ECHO   equ      1        Telnet ECHO option
+T_SUPGA  equ      3        Telnet Suppress Go-Ahead
+T_TERM   equ      24       Telnet Terminal type sub-option
+T_NAWS   equ      31       Telnet Negotiate window size
 
-RXQ_SIZE EQU      8192     Size of receive buffer
+PROT_XMO EQU      0        XMODEM
+PROT_X1K EQU      1        XMODEM-1K
+PROT_YMO EQU      2        YMODEM
+PROT_YMG EQU      3        YMODEM-G
 
-version  SETSTR   2.35
+* Bits used in D7 when down/uploading
+
+XM..CRC  EQU      0        1 when using CRC mode
+XM..128  EQU      7        1 when using 128-byte blocks
+XM..1K   EQU      10       1 when using 1K-byte blocks
+XM..HD   EQU      16       1 when first buffer block written
+XM..YMG  EQU      17       1 when receiver requested Ymodem-G
+XM..ACK  EQU      18       1 when first block ACKed
+XM..EOF  EQU      19       1 when sent file at EOF
+XM..CLR  EQU      20       1 to clear status message on next BLOCKMSG call
+XM..CAN  EQU      21       1 when CAN received
+XM..EOT  EQU      22       1 when first EOT ACK'ed
+
+; RXQ_SIZE EQU      8192     Size of receive buffer
+
+* Input queue 
+
+         offset   0
+q_eoff   equ      *          end of file flag (msbit)
+q_nextq  ds.l     1          link to next queue
+q_end    ds.l     1          pointer to end of queue
+q_nextin ds.l     1          pointer to next location to put byte in
+q_nxtout ds.l     1          pointer to next location to take byte from
+q_queue  equ      *          start of queue
+
+
+version  SETSTR   3.00b1
 
 * Variables
 
@@ -43,25 +87,48 @@ PIPE_IN  DS.L     1
 PIPE_OUT DS.L     1
 SCRJBID  DS.L     1        job ID of terminal process
 SERJBID  DS.L     1        job ID of serial input process
-RXQ_BASE DS.L     1        base of RX queue
-RXQ_TOP  DS.L     1        top of RX queue
-RXQ_HEAD DS.L     1        Head of RX queue (first char)
-RXQ_TAIL DS.L     1        Tail of RX queue (last char)
+RXQ_BASE DS.L     1        base of RX queue (now pointer to QDOS queue!)
+; RXQ_TOP  DS.L     1        top of RX queue
+; RXQ_HEAD DS.L     1        Head of RX queue (first char)
+; RXQ_TAIL DS.L     1        Tail of RX queue (last char)
 LOGCHID  DS.L     1        ID of log channel
-FILELEN  DS.L     1
-ESCRTN   DS.L     1
-CURSAV   DS.W     2
+DLDIR    DS.L     1        pointer to default download directory
+FILELEN  DS.L     1        File length
+FILETYPE DS.W     1        File access + type
+FILE_DAT DS.L     2        File data space + extra long word
+FILE_UPD DS.L     1        File update date
+ESCRTN   DS.L     1        Pointer to ESC code handler routine
+
+* ! Do not change the order of following 3 entries !
+WIN_COLS DS.W     1        Number of columns in main window
+WIN_ROWS DS.W     1        Number of rows in main window
+CURSAV   DS.W     2        Cursor position save area
+
 PB_PNT   DS.W     1
+FNAM_OFS DS.W     1        Offset of real file name in FNAMBUF
 BUFLEN   DS.W     1        BUFFER LENGTH (IN K)
 MODEMTYP DS.B     1        MODEM TYPE: 0 QMODEM, 1 MODAPTOR, 2 SER3
-BAUD     DS.B     1        BAUD RATE: 0: 75, 1: 300 .. 6: 9600, 7: 1200M75, 8: 1200P75, 9: 1200S75
+BAUD     DS.B     1        BAUD RATE: 0: 75, 1: 300 .. 10: 115200, 11: Hermes 1200/75
+BAUD_HER EQU      11
 PARITY   DS.B     1        PARITY: -1 NONE, 0 ODD, 1 EVEN, 2 MARK, 3 SPACE
 ECHOMOD  DS.B     1        ECHO MODE: -1 FD, 0 HD, 1 LOCAL
 SCRMOD   DS.B     1        SCREEN MODE: -1 ASCII, 0 VT52, 1 ANSI
 COLRMOD  DS.B     1        COLOUR: 0 OFF, 1 ON
 CONVLF   DS.B     1        CONVERT QDOS LF'S: 0 NO, 1 YES
 L_COOKED DS.B     1        LOG MODE: 0 RAW, 1 COOKED
-PORT     DS.B     1
+PORT     DS.B     1        Index for communication device
+P_STD    EQU      5        Highest number for standard devices
+P_SER1I  EQU      0
+P_SER1H  EQU      1
+P_SER2I  EQU      2
+P_SER2H  EQU      3
+P_CUSTOM EQU      4        Custom device (pre-configured)
+P_TCP    EQU      5        Raw TCP
+P_TELNET EQU      6        Telnet
+
+ENTERKEY DS.B     1        Enter key: 0 sends CR, 1 LF, 2 CR+LF
+DELKEY   DS.B     1        Backspace key: 0 sends CTRL-H, 1 sends DEL
+
 XOFFMOD  DS.B     1        XOFF sent
 DLMOD    DS.B     1        Downloading?
 ESCMOD   DS.B     1        ESC received?
@@ -71,10 +138,30 @@ CONECTED DS.B     1        Connected?
 REDIR    DS.B     1        In/Output redirected
 USE_PIPE DS.B     1        True when using pipes
 IN_EOF   DS.B     1        True when EOF on input
+IAC_STAT DS.B     1        Telnet IAC status
+GOT_IAC  DS.B     1        Set when last char recvd was IAC
+GOT_CMD  DS.B     1        Got Telnet command
+GOT_SUB  DS.B     1        Got Telnet suboption
+SUB_OPER DS.B     1        Suboption operator
+CONF_VAR DS.W     0        word boundary
+CONF_BIN DS.B     1        Confirmed Telnet binary transmission option
+CONF_ECH DS.B     1        Confirmed Telnet echo option
+CONF_SUP DS.B     1        Confirmed Telnet Suppress Go_Ahead option
+XFERPROT DS.B     1        File transfer protocol
+YMODEM_G DS.B     1        <>0 when receiving Ymodem-G
+         DS.W     0        Next areas should be word-aligned
+COMNAME  DS.B     48       Name of comm device (only if TCP or cmd line)
+FNAMBUF  DS.B     48       Buffer for file name (full name)
          DS.W     0        Next areas are word aligned
 PARBUF   DS.B     80       ESC sequence parameter buffer
-TXMODBUF DS.B     132      Buffer for XMODEM
-RXQ      DS.B     RXQ_SIZE RX queue
+         DS.W     0
+         DS.B     1        Spare - TXMODBUF must be word aligned
+XMBLKTYP DS.B     1        X/Ymodem block type (SOH/STX)
+TXMODBUF DS.B     1024+4   Buffer for X/YMODEM (blknum+~blknum+data+CRC)
+         DS.W     0
+VARS_END EQU      *        End of variables
+; RXQ      DS.B     RXQ_SIZE RX queue
 
-         DATA     1024+RXQ_SIZE     Allow for RX queue + 1K
+         DATA     2048
 
+         LIST
