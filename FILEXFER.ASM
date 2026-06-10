@@ -33,10 +33,21 @@ PRMSG    MACRO    A
          LIST
          ENDM
 
-         XDEF     DOWNLOAD,UPLOAD
+FXSTATUS MACRO    A
+         NOLIST
+[.LAB]   LEA      .S.[.L],A1
+         BSR      BLOCKMSG
+         SECTION  MSG
+.S.[.L]  STRING$  {[A]}
+         SECTION  CODE
+         LIST
+         ENDM
+
+         XDEF     DOWNLOAD,UPLOAD,OF_ASK
 
          XREF     TXCHR,TXSTR,T_WAIT,GETREPLY,PRINTAUX,OPEN_DEF,DTOI_L,OTOI_L
          XREF     ITOD_L,ITOO_L,CRC_TBL,GETMENU,OPEN_PRE,OPENFILE,RXCHAR
+         XREF     DIS_TRA,DIVLONG
 
          DATA     0
 
@@ -68,6 +79,11 @@ OPEN_BAT MOVE.W   #-1,A5            ; signal 'no file opened yet'
 OF_QUIT  MOVEQ    #ERR.NC,D0
          RTS
 
+* Ask for file name and open it
+* Entry: D4 open key, A0 command/status channel ID
+* Exit: D0 error status, A5 channel ID of file opened
+* Full name of file is in FNAMBUF(A6)
+
 OF_ASK   PRINT    {'File Name: '}
          LEA      FNAMBUF+2(A6),A1
          MOVEQ    #-1,D3
@@ -95,8 +111,6 @@ OF_ASK   PRINT    {'File Name: '}
 * FNAM_OFS(A6) should hold the offset to the plain file name
 * (after the device name + possible subdirectory name)
 
-SV_DATAD EQU      $B0               ; offset DATAD$ pointer from sysvars base
-
 OF_DIR   QDOS     MT.INF            ; get sysvars base
          LEA      SV_DATAD(A0),A1   ; default data directory (pointer!)
          LEA      FNAMBUF(A6),A0    ; file name + possible subdir
@@ -106,20 +120,17 @@ OF_DIR   QDOS     MT.INF            ; get sysvars base
          MOVE.L   A0,A5             ; save channel ID
          MOVEQ    #-1,D1
          MOVEQ    #4,D3
+         CLR.W    TXMODBUF+14(A6)   ; no subdir name yet
          LEA      FNAMBUF(A6),A0
          QDOS     IO.OPEN           ; now open again as directory
          TST.L    D0                ; successful?
-         BEQ.S    OF_HDR            ; yes, get header
-         LEA      FNAMBUF+2(A6),A0  ; assume no directory device
-         BRA.S    OF_NSUB           ; exit
-         
-OF_HDR   MOVEQ    #64,D2            ; get 64 bytes of header
+         BNE.S    OF_DEVNM          ; no, assume no subdir
+         MOVEQ    #64,D2            ; get 64 bytes of header
          MOVEQ    #-1,D3
          LEA      TXMODBUF(A6),A1   ; temporary buffer
-         CLR.W    14(A1)            ; no filename yet
          QDOS     FS.HEADR          ; read the header
          QDOS     IO.CLOSE          ; close the channel
-         LEA      FNAMBUF(A6),A0
+OF_DEVNM LEA      FNAMBUF(A6),A0
          MOVE.L   2(A0),D1          ; get first 4 chars of device
          SUBI.L   #$00010000,D1
          ANDI.L   #$C0F8FF00,D1     ; match on letter+digit+underscore
@@ -144,7 +155,7 @@ OF_NSUB  MOVE.L   A0,D0             ; A0 now points to plain file name
          RTS
 
 FERROR   MOVE.L   D0,-(A7)          ; print error message
-         PRMSG    {'ERROR: '}
+         PRMSG    {'FILE ERROR: '}
          MOVE.L   (A7),D0
          MOVE.W   UT_ERR,A1
          JSR      (A1)
@@ -220,43 +231,68 @@ DUP      DC.B     '_dup0'
 * Exit:  D0 != 0 and flag NE if user pressed CTRL-X to abort transfer
 *        All other regs preserved
 
+BM_STRCP MOVE.W   (A0)+,D0
+BM_STRLP MOVE.B   (A0)+,(A1)+
+         SUBQ.W   #1,D0
+         BGT      BM_STRLP
+         RTS
+
 BLOCKMSG MOVEM.L  D1-D3/A0-A1,-(A7)
-         MOVE.L   CMDWIN(A6),A0
-         MOVEQ    #0,D3             ; use zero timeout so don't hang on ctl-c
-         MOVEQ    #0,D1
-         QDOS     SD.TAB
-         LOAD$    {'File: '},A1
-         MOVE.W   (A1)+,D2
-         QDOS     IO.SSTRG
-         LEA      FNAMBUF(A6),A1
-         MOVE.W   (A1)+,D2
-         ADDA.W   FNAM_OFS(A6),A1
-         SUB.W    FNAM_OFS(A6),D2
-         QDOS     IO.SSTRG          ; print file name
-         SUBA.W   #32,A7
-         MOVE.L   A7,A1
-         MOVE.L   D5,D1
+         MOVE.L   A1,D0             ; message to display?
+         BNE.S    BM_DISP           ; yes, skip test
+         QDOS     MT.RCLCK
+         CMP.L    BM_LAST(A6),D1    ; how long ago was last display?
+         BEQ      BM_OK             ; do not display too often
+         MOVE.L   D1,BM_LAST(A6)    ; update time of last display
+BM_DISP  LEA      VARS_END(A6),A1   ; scrap buffer
+         LOAD$    {'File: '},A0
+         BSR      BM_STRCP
+         LEA      FNAMBUF(A6),A0
+         BSR      BM_STRCP
+         MOVE.L   D5,D1             ; bytes received so far
          MOVE.B   #' ',(A1)+
          JSR      ITOD_L
          MOVE.L   FILELEN(A6),D1
          BMI.S    BM_NOLEN
          MOVE.B   #'/',(A1)+
-         JSR      ITOD_L
-BM_NOLEN MOVE.B   #' ',(A1)+
+         JSR      ITOD_L            ; expected length
+BM_NOLEN MOVE.B   #' ',(A1)+        ; followed by two spaces
          MOVE.B   #' ',(A1)+
-         MOVE.L   A1,D2
-         MOVE.L   A7,A1
-         SUB.L    A1,D2
-         QDOS     IO.SSTRG          ; print progress
-         ADDA.W   #32,A7
-         MOVE.L   16(A7),D0         ; original A1
-         BNE.S    BM_MSG
-         BCLR     #XM..CLR,D7       ; set to clear status msg
-         BNE.S    BM_CLR
-BM_MSG   MOVE.L   D0,A1
-         MOVE.W   (A1)+,D2
-         QDOS     IO.SSTRG          ; print status message (if any)
-BM_CLR   QDOS     SD.CLRRT
+
+; display throughput
+
+BM_TP    MOVE.L   FXSTART(A6),D1
+         BEQ.S    BM_MSG
+         MOVE.L   BM_LAST(A6),D0
+         SUB.L    D1,D0             ; duration of download so far
+         BEQ.S    BM_MSG            ; don't divide by zero
+         MOVE.L   D5,D1             ; bytes got so far
+;         LSR.L    #8,D1
+;         LSR.L    #2,D1
+         JSR      DIVLONG           ; get KB/s
+         JSR      ITOD_L            ; asciify
+         LOAD$    {' B/s  '},A0
+         BSR      BM_STRCP          ; followed by B/s
+BM_MSG   MOVE.L   16(A7),D0         ; original A1
+         BEQ.S    BM_SSTR           ; no message, skip this
+         MOVE.L   D0,A0             ; get pointer to msg
+         BSR      BM_STRCP          ; copy message
+         BCLR     #XM..FCNT,D7      ; need to add failure count?
+         BEQ.S    BM_SSTR           ; no
+         MOVE.L   D4,D1             ; add failure count
+         JSR      ITOD_L
+
+BM_SSTR  MOVE.L   A1,D2             ; save A1
+         MOVE.L   CMDWIN(A6),A0
+         MOVEQ    #0,D3             ; use zero timeout so don't hang on ctl-c
+         MOVEQ    #0,D1             ; go to start of status line
+         QDOS     SD.TAB
+         LEA      VARS_END(A6),A1   ; start of scrap buffer
+         SUB.L    A1,D2             ; length of message
+         QDOS     IO.SSTRG          ; display it
+         BCLR     #XM..CLR,D7       ; need to clear previous status message?
+         BEQ.S    BM_INP            ; no
+BM_CLR   QDOS     SD.CLRRT          ; clear rest of line
 BM_INP   QDOS     IO.FBYTE          ; check for any keypress
          TST.L    D0
          BNE.S    BM_OK
@@ -309,8 +345,7 @@ DOWNLOAD MOVE.B   XFERPROT(A6),D1
          PRMSG    {'Download - '}
          MOVEQ    #2,D4
          BSR      OPEN_BAT          ; create new file (Xmodem only)
-         MOVEQ    #0,D2
-         BSR      SP_SERJB          ; stop serial input job
+         BSR      TERM_OFF          ; stop serial input job
          MOVEQ    #0,D1
          LEA      TXMODBUF+2(A6),A2 ; preset A2 to start of tx/rx buffer data
          MOVE.L   D1,A3             ; preset A3 and A4 to null
@@ -347,8 +382,9 @@ DL_ACK1  ADDQ.L   #1,D6             ; ACK Ymodem file descriptor block
          BNE.S    DL_START          ; Don't ACK descriptor block with Ymodem-G
          MOVEQ    #ACK,D1
          JSR      TXCHR
-DL_START LOAD$    {'Waiting for sender...'},A1
-         BSR      BLOCKMSG
+DL_START QDOS     MT.RCLCK
+         MOVE.L   D1,FXSTART(A6)    ; set start time of download
+         FXSTATUS {'Waiting for sender...'}
          BNE      DL_CAN
 DL_PURG1 MOVEQ    #50,D3            ; This loop added because there are
          JSR      RXCHAR            ; braindead implementations which send
@@ -392,6 +428,8 @@ DL_PURGE JSR      RXCHAR            ; purge all input
          BRA.S    DL_OUT
 
 DL_ACK   MOVEQ    #ACK,D1           ; send ACK
+         BSET     #XM..CLR,D7       ; clear any status message
+         MOVEQ    #1,D4             ; reset error counter
          TST.B    YMODEM_G(A6)
          BNE.S    DL_STAT           ; Don't ACK blocks in Ymodem-G
 DL_OUT   JSR      TXCHR
@@ -445,15 +483,15 @@ DL_RTLP  MOVEM.L  D2/A1,-(A7)       ; rxchar smashes D2/A1
          BNE      DL_RTLP           ; and loop
 DL_CKSUM BSR      CALCHK            ; checksum OK?
          BEQ.S    DL_LBLK           ; yes
-         LOAD$    {'Checksum/CRC error'},A1
+         LOAD$    {'Checksum/CRC error #'},A1
          BRA.S    DL_CKERR
 
-DL_TIMO  LOAD$    {'Timeout'},A1
+DL_TIMO  LOAD$    {'Timeout #'},A1
 DL_CKERR TST.B    YMODEM_G(A6)      ; block error, fatal with Ymodem-G
          BNE.S    DL_FAIL
+         BSET     #XM..FCNT,D7      ; display 
          BSR      BLOCKMSG          ; display progress + error message
          BNE      DL_CAN            ; user wants to bail out...
-         BSET     #XM..CLR,D7       ; clear error on next call
          ADDQ.B   #1,D4             ; bump error counter
          CMPI.B   #10,D4
          BLE      DL_NAK            ; NAK it unless more than 10 errors
@@ -484,7 +522,7 @@ DL_LBLK  MOVEQ    #0,D4             ; reset error count
 
 ; if all else fails...
 
-DL_FAIL  PRMSG    {'FATAL ERROR: Synchronisation loss'}
+DL_FAIL  FXSTATUS {'FATAL ERROR: Synchronisation loss'}
          BRA.S    DL_CAN
 
 ; Correct block received, now process it
@@ -519,11 +557,11 @@ DL_NEXT  ADD.L    D2,D5             ; bump file position
          ADDQ.L   #1,D6             ; and block number (long!)
          BRA      DL_ACK            ; and ACK it
 
-DL_END   PRMSG    {'Download OK'}   ; got EOT
+DL_END   FXSTATUS {'Download OK'}   ; got EOT
          MOVEQ    #ACK,D1           ; ack EOT
          BRA.S    DL_AKEOT
 
-DL_ABORT PRMSG    {'Download aborted by remote'}
+DL_ABORT FXSTATUS {'Download aborted by remote'}
 DL_CAN   MOVEQ    #CAN,D1           ; fatal error...
          JSR      TXCHR             ; send CAN twice
 DL_AKEOT MOVE.B   D1,D4             ; save as flag
@@ -545,8 +583,8 @@ DL_EXIT  MOVEQ    #100,D3
             MOVE.L   D0,A0          ; release it unless no buffer
             QDOS     MT.RECHP
          ENDIF
-         MOVEQ    #32,D2
-         BSR      SP_SERJB          ; re-activate serial input
+         BSR      TERM_ON           ; re-activate serial input
+         SF       DO_STAT(A6)       ; don't display status before keypress
          RTS
 
 * Get pointer to block to be saved in A1
@@ -752,8 +790,7 @@ UPLOAD   MOVE.B   XFERPROT(A6),D1
          MOVEQ    #1,D4
          BSR      OPEN_BAT          ; open file for read
          BNE.S    UL_FAIL
-         MOVEQ    #0,D2
-         BSR      SP_SERJB          ; stop serial input job
+         BSR      TERM_OFF          ; stop serial input job
 UL_NXFIL MOVEQ    #0,D5             ; file position
          MOVEQ    #1,D6             ; starting block
          MOVE.L   #128,D7           ; assume 128 byte block + no crc + no flags
@@ -774,7 +811,8 @@ UL_FAIL  MOVEQ    #ERR.NC,D1
          LEA      FNAMBUF(A6),A1
          MOVE.W   UT_MTEXT,A2
          JSR      (A2)
-         PRMSG    {': '}
+         LOAD$    {': '},A1
+         JSR      (A2)
          MOVE.L   (A7)+,D0
          MOVE.W   UT_ERR,A2
          JSR      (A2)
@@ -825,7 +863,8 @@ UL_CHKS  BSR      CALCHK            ; calculate checksum
 
 UL_XMOD  BSR      GETBUFF           ; get first data block
          BNE      UL_QUIT
-UL_PRBLK PRMSG    {'Waiting for receiver...'}
+UL_PRBLK CLR.L    FXSTART(A6)       ; no start time yet
+         PRMSG    {'Waiting for receiver...'}
          MOVEQ    #0,D4
 UL_ACKW  MOVEQ    #0,D3             ; timeout 0
          BTST     #XM..YMG,D7       ; Ymodem-G?
@@ -841,7 +880,13 @@ UL_EAT   JSR      RXCHAR            ; test if a character is available
 UL_WAIT  MOVE.W   #3000,D3          ; wait at most 1 minute
 UL_FBYTE JSR      RXCHAR            ; get response from receiver
          BNE      UL_ABORT          ; timeout or other error
-         CMPI.B   #NAK,D1           ; got NAK?
+         TST.L    FXSTART(A6)
+         BNE.S    TST_NAK
+         MOVE.W   D1,-(A7)
+         QDOS     MT.RCLCK          ; set start time of transfer
+         MOVE.L   D1,FXSTART(A6)
+         MOVE.W   (A7)+,D1
+TST_NAK  CMPI.B   #NAK,D1           ; got NAK?
          BEQ.S    UL_XMIT           ; yes, resend block
 UL_CANCK CMPI.B   #CAN,D1           ; CAN?
          BEQ      UL_CAN            ; yes, but check flag first
@@ -908,27 +953,39 @@ UL_CAN   BSET     #XM..CAN,D7        ; already got a CAN?
          LEA      CANMSG,A1
          BRA.S    UL_MSG
 UL_OK    LEA      ULOKMSG,A1
-UL_MSG   JSR      PRINTAUX
+UL_MSG   JSR      BLOCKMSG
          BRA.S    UL_EXIT
 UL_QUIT  MOVEQ    #CAN,D1
          JSR      TXCHR
-UL_EXIT  MOVEQ    #32,D2
-         BSR.S    SP_SERJB
+UL_EXIT  BSR.S    TERM_ON
          MOVE.L   A5,A0
          MOVE.W   A0,D0
          BMI.S    UL_END
          QDOS     IO.CLOSE
-UL_END   MOVE.L   CMDWIN(A6),A0
-         MOVE.W   #100,D3
-         QDOS     IO.FBYTE
+UL_END   SF       DO_STAT(A6)       ; don't display status before keypress
          RTS
 
-SP_SERJB MOVE.L   SERJBID(A6),D1
-         TST.W    D1
-         BLT.S    SP_1
-         QDOS     MT.PRIOR
+* Disable terminal processes during file transfers
+* Optional: disable serial translations for foreign systems
+
+TERM_OFF MOVEQ    #0,D1             ; disable SER translation
+         MOVEQ    #0,D2             ; stop SERjob
+         BRA.S    SET_TRA
+TERM_ON  MOVEQ    #1,D1             ; enable SER translation
+         MOVEQ    #127,D2           ; maximum priority for SERjob
+SET_TRA  MOVE.B   DIS_TRA(PC),D0    ; check TRA option
+         BEQ.S    SP_SERJB          ; do not change it
+         MOVE.L   D2,-(A7)          ; save D2
+         MOVEQ    #0,D2             ; keep original message table
+         QDOS     SMS.TRNS          ; enable/disable SER translation
+         MOVE.L   (A7)+,D2          ; restore D2
+SP_SERJB MOVE.L   SERJBID(A6),D1    ; get SERjob ID
+         TST.W    D1                ; is there really a job?
+         BLT.S    SP_1              ; no, skip
+         QDOS     MT.PRIOR          ; set priority
          RTS
-SP_1     MOVE.L   SCRJBID(A6),D1
+SP_1     MOVE.L   SCRJBID(A6),D1    ; if no SERjob, stop/start screen job
+         ANDI.B   #$1F,D2           ; limit priority for screen job
          QDOS     MT.PRIOR
          TST.B    D2
          IF EQ THEN

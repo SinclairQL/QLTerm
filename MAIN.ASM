@@ -32,9 +32,10 @@
          INCLUDE  QLTERM_IN
          INCLUDE  ASSERT_INC
 
-         XDEF     PRINTAUX,TERMBASE,GETREPLY,MAINWINP,GETMENU,DEFRXBUF
+         XDEF     PRINTAUX,TERMBASE,GETREPLY,MAINWINP,GETMENU,DEFRXBUF,DEFBELL
+         XDEF     DIS_TRA
 
-         XREF     SERJOB,SCRJOB,DOWNLOAD,UPLOAD,OPENFILE,GR_SET1
+         XREF     SERJOB,SCRJOB,DOWNLOAD,UPLOAD,GR_SET1,OPEN_DEF,OF_ASK
          XREF     TXCHR,TXCHR_A,TXSTR,RXCHAR,PUT_RXQ,T_WAIT
 
 * Print a message on the command window
@@ -205,6 +206,10 @@ CFG_VER  EQU      '3.00'
           mkcfitem 'QLTI',byte,0,OPENMODE,,,\
           {Mode for opening SER/TCP port},0,255
           
+          mkcfitem 'QLTR',code,0,DIS_TRA,,,\
+          {Turn off SER TRAnslation during file transfers}\
+          0,N,{No},1,Y,{Yes}
+          
           mkcfitem 'QLTJ',code,0,DEFPROT,,,\
           {Default file transfer protocol}\
           0,X,{Xmodem},1,1,{Xmodem-1K},2,Y,{Ymodem},3,G,{Ymodem-G}
@@ -229,6 +234,7 @@ DEFPROT  DC.B     PROT_YMO          ; Default file transfer protocol
 DEFBELL  DC.B     1                 ; Make sound on receiving BEL
 DEFENTER DC.B     0                 ; char to send on ENTER key
 DEFDEL   DC.B     1                 ; 0: send ctrl-H (8), 1: send DEL (127)
+DIS_TRA  DC.B     0                 ; disable TRA during filetransfer
 
          DS.W     0                 ; Next block should be word-aligned!
 
@@ -462,10 +468,16 @@ ACT_SCR  MOVE.L   SCRJBID(A6),D1
          MOVEQ    #32,D2            ; start the screen update job
          MOVEQ    #0,D3
          QDOS     MT.ACTIV
-MAIN_MSG BSR      STATUS            ; display status
-         MOVE.L   MAINWIN(A6),A0    ; get main window ID
+         TAS      DO_STAT(A6)       ; enable status display
+
+* Return point after commands
+
+MAIN_MSG MOVE.L   MAINWIN(A6),A0    ; get main window ID
          MOVEQ    #-1,D3
          QDOS     SD.CURE           ; enable cursor
+         TST.B    DO_STAT(A6)       ; redisplay status line?
+         BEQ.S    MAIN_LP           ; no, wait for key press
+         BSR      STATUS            ; else, display status
 
 * Main execution loop
 
@@ -509,7 +521,7 @@ TST_KEY  CMPI.B   #F3,D1            F3 key pressed for Menu?
          MOVE.L   MAINWIN(A6),A0
          MOVEQ    #-1,D3
          QDOS     SD.CURS           ; disable cursor in main window
-CMD_AGN  PRMSG    {'Connect, Download, Hangup, Interface, Log, Options, Quit, Upload >'}
+CMD_AGN  PRMSG    {'Connect, Download, Hangup, Interface, Log, Options, Quit, Transmit, Upload >'}
          QDOS     SD.CURE           ; enable it for cmd window
          QDOS     IO.FBYTE          ; get keypress
          MOVE.B   D1,D2             ; save it
@@ -531,7 +543,11 @@ CMD_END  SF       DLMOD(A6)         ; return from cmd, enable terminal
 
 * 'Ordinary' key press - look for generic conversion first
 
-KEY2     LEA      K_GEN,A1
+KEY2     TAS      DO_STAT(A6)       ; Need to display status line now?
+         IF EQ THEN
+            BSR      STATUS         ; it's only needed after down/upload
+         ENDIF
+         LEA      K_GEN,A1
          CMPI.B   #LF,D1            ; ENTER key
          BNE.S    KEY_DEL
          MOVE.B   ENTERKEY(A6),D0   ; get mode
@@ -963,24 +979,34 @@ CALL:    CMPI.B   #P_TCP,PORT(A6)
          BSR      GETREPLY          ; NE if N chosen
          BNE      DC_RTS            ; do not disconnect
          BSR      DISCON
-CALL_2   PRMSG    {'Enter phone number, host name or IP address: '}
-         LEA      TXMODBUF+2(A6),A1
-         MOVEQ    #36,D2
-         QDOS     IO.FLINE
-         SUBA.W   D1,A1
+CALL_2   PRMSG    {'Enter phone number, hostname or IP address: '}
+         LEA      HOSTNAME(A6),A1
+         MOVEQ    #0,D1
+         MOVE.W   (A1)+,D1          ; current length
+         ADDA.W   D1,A1             ; set A1 to end of string
+         MOVEQ    #37,D2            ; allow for 36 chars + terminator
+         QDOS     IO.EDLIN          ; allow for editing previous entry
+         CMPI.B   #ESC,-(A1)        ; ESC?
+         BEQ      CALL_END
          SUBQ.W   #1,D1
          BEQ.S    CONNECT           ; empty input, connect right away
+         CMPI.B   #LF,(A1)          ; user terminated with ENTER?
+         BEQ.S    CALL_2A           ; yes, go ahead
+         CLR.W    HOSTNAME(A6)      ; else, clear hostname and ask again
+         BRA      CALL_2
+
+CALL_2A  LEA      HOSTNAME(A6),A1
+         MOVE.W   D1,(A1)+          ; save length
          CMPI.B   #P_TCP,PORT(A6)
          BGE.S    CALL_TCP
-         MOVE.W   D1,-(A1)          ; save length
          LEA      MDM_DPRE+2(PC),A1
          BSR      SENDCMD           ; pre-dial string ('ATD')
-         LEA      TXMODBUF(A6),A1
+         LEA      HOSTNAME(A6),A1
          BSR      SENDCMD           ; send phone number
          LEA      MDM_DPST+2(PC),A1
          BSR      SENDCMD           ; post-dial string
          MOVEQ    #0,D0
-         BRA.S    CALL_END          ; we'll assume
+         BRA.S    CALL_END          ; we'll assume no error
 CALL_TCP
          LEA      COMNAME+2(A6),A0
          MOVE.L   #'TCP_',(A0)+
@@ -1185,14 +1211,18 @@ IF_CONN  ST       CONECTED(A6)
          MOVEQ    #0,D0             ; exit with zero flag set
 IF_END   RTS
 
-LOG      TST.W    LOGCHID+2(A6)
-         BGE.S    LOG_CLOS
+LOG      TST.W    LOGCHID+2(A6)     ; already capturing?
+         BGE.S    LOG_CLOS          ; yes, ask to close it
          PRINT    {'Log - '}
-         MOVEQ    #2,D4
-         JSR      OPENFILE
-         MOVE.L   A5,LOGCHID(A6)
-         RTS
-LOG_CLOS MOVE.L   LOGCHID(A6),A0
+         MOVEQ    #IO.NEW,D4        ; open new file
+         JSR      OF_ASK            ; ask for name and open it
+         BNE.S    LOG_RTS
+         MOVE.L   A5,LOGCHID(A6)    ; save ID
+LOG_RTS  RTS
+LOG_CLOS PRINT    {'Logging is active. Close logfile'}
+         BSR      GETREPLY
+         BNE.S    LOG_RTS
+         MOVE.L   LOGCHID(A6),A0
          QDOS     IO.CLOSE
          MOVEQ    #-1,D0
          MOVE.L   D0,LOGCHID(A6)
@@ -1200,6 +1230,29 @@ LOG_CLOS MOVE.L   LOGCHID(A6),A0
          PRINT    {'Logfile closed'}
          MOVEQ    #100,D3
          BRA      T_WAIT
+
+         GENIF    0 = 1             ; obsolete code, use OF_ASK now
+
+GETFILE  MOVE.L   CMDWIN(A6),A0
+         PRINT    {'File Name: '}
+         LEA      FNAMBUF+2(A6),A1
+         MOVEQ    #-1,D3
+         MOVEQ    #44,D2
+         QDOS     IO.FLINE          ; get file name from user input
+         SUBQ.W   #1,D1
+         BEQ.S    GF_NC
+         LEA      FNAMBUF(A6),A0
+         MOVE.W   D1,(A0)
+         MOVE.L   A4,A1
+         MOVE.W   D4,D3
+         JSR      OPEN_DEF
+         BNE.S    GF_RTS
+         MOVE.L   A0,A5
+GF_RTS   RTS
+GF_NC    MOVEQ    #ERR.NC,D0
+         RTS
+
+         ENDGEN
 
 SCRNMSG  DC.W     3
          STRING$  {' ASCII '}
@@ -1274,35 +1327,40 @@ OPTIONS  PRINT    {'Terminal Emulation: '}
          SF       PARNUM(A6)
 OPT_RTS  RTS
 
+* Transmit an ASCII file
+
 TRANSMIT PRINT    {'Transmit - '}
-         MOVEQ    #1,D4
-         JSR      OPENFILE
+         MOVEQ    #IO.SHARE,D4      ; open for input
+         JSR      OF_ASK            ; ask for name
+         BNE.S    XMIT_RTS
 XMIT_LP  MOVE.L   A5,A0
+         LEA      TXMODBUF(A6),A1
+         MOVE.W   #1024,D2          ; buffer size
          MOVEQ    #-1,D3
-         QDOS     IO.FBYTE
+         QDOS     IO.FLINE          ; get one line of text
          TST.L    D0
-         BNE.S    XMIT_END
-         CMPI.B   #LF,D1
-         BNE.S    XMIT_2
-         TST.B    CONVLF(A6)
-         BEQ.S    XMIT_2
-         MOVEQ    #CR,D1
-XMIT_2   JSR      TXCHR
-         TST.B    ECHOMOD(A6)
-         IF LE AND D1 EQ.B #CR THEN
-            MOVEQ    #50,D3
-            BSR      T_WAIT
-         ENDIF
+         BEQ.S    XMIT_EOL
+         CMPI.L   #ERR.BO,D0        ; Long line?
+         BEQ.S    XMIT_2            ; OK, don't consider EOL
+         BRA.S    XMIT_END          ; exit with any other error
+XMIT_EOL TST.B    CONVLF(A6)        ; do we need to convert?
+         BEQ.S    XMIT_2            ; no
+         MOVE.B   #CR,-1(A1)        ; replace LF by CR+LF
+         MOVE.B   #LF,(A1)+
+         ADDQ.W   #1,D1             ; and add the extra byte
+XMIT_2   MOVE.W   D1,D2             ; length of string
+         LEA      TXMODBUF(A6),A1
+         JSR      TXSTR             ; send as string
          MOVE.L   CMDWIN(A6),A0
          MOVEQ    #0,D3
-         QDOS     IO.FBYTE
+         QDOS     IO.FBYTE          ; check for ESC key
          TST.L    D0
          BNE      XMIT_LP
          CMPI.B   #ESC,D1
          BNE      XMIT_LP
-XMIT_END MOVE.L   A5,A0
+XMIT_END MOVE.L   A5,A0             ; close channel
          QDOS     IO.CLOSE
-         RTS
+XMIT_RTS RTS
 
 HANGUP   PRINT    {'Disconnect line'}
          BSR.S    GETREPLY
