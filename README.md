@@ -1,3 +1,19 @@
+QLTerm Version 3.00b2 (10/6/2026)
+=================================
+
+Many bug fixes:
+
+- Various ANSI rendering bugs fixed (e.g. inverse video)
+- 'Log' and 'Transmit' menu options do work again
+- File transfer progress on status line displayed spurious characters or strings of rubbish
+- File transfer progress on status line now displays the full file name, including device and possible subdirectory name. For download, this is the path configured as download directory (default RAM2_). For upload, this is the full path entered by the user, or the default data directory set by DATA_USE when only the file name has been entered. Note that, during Ymodem file transfers, QLTerm will always send only the bare file name to the remote side, not including device and subdirectory name (as per Ymodem specification).
+- File transfer progress now also displays throughput
+- BEL configuration option had no effect
+- Using 'Local echo' option could cause a race condition on display
+- Under certain circumstances, QLTerm could lock up after displaying more than 32K bytes
+- Enhancement: During file transfers, QLTerm may optionally disable serial port TRAnslations
+- Enhancement: The Connect command remembers the last phone number or host name you entered so you can re-connect with just ENTER, or clear the entry using arrow up/down keys.
+
 QLTerm Version 3.00b1 (22/5/2026)
 =================================
 

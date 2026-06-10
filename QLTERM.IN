@@ -55,8 +55,9 @@ XM..YMG  EQU      17       1 when receiver requested Ymodem-G
 XM..ACK  EQU      18       1 when first block ACKed
 XM..EOF  EQU      19       1 when sent file at EOF
 XM..CLR  EQU      20       1 to clear status message on next BLOCKMSG call
-XM..CAN  EQU      21       1 when CAN received
-XM..EOT  EQU      22       1 when first EOT ACK'ed
+XM..FCNT EQU      21       1 to display failure count after status msg
+XM..CAN  EQU      22       1 when CAN received
+XM..EOT  EQU      23       1 when first EOT ACK'ed
 
 ; RXQ_SIZE EQU      8192     Size of receive buffer
 
@@ -71,7 +72,7 @@ q_nxtout ds.l     1          pointer to next location to take byte from
 q_queue  equ      *          start of queue
 
 
-version  SETSTR   3.00b1
+version  SETSTR   3.00b2
 
 * Variables
 
@@ -93,6 +94,8 @@ RXQ_BASE DS.L     1        base of RX queue (now pointer to QDOS queue!)
 ; RXQ_TAIL DS.L     1        Tail of RX queue (last char)
 LOGCHID  DS.L     1        ID of log channel
 DLDIR    DS.L     1        pointer to default download directory
+FXSTART  DS.L     1        Time of start of down/upload
+BM_LAST  DS.L     1        Time of last block message
 FILELEN  DS.L     1        File length
 FILETYPE DS.W     1        File access + type
 FILE_DAT DS.L     2        File data space + extra long word
@@ -143,6 +146,8 @@ GOT_IAC  DS.B     1        Set when last char recvd was IAC
 GOT_CMD  DS.B     1        Got Telnet command
 GOT_SUB  DS.B     1        Got Telnet suboption
 SUB_OPER DS.B     1        Suboption operator
+INV_VID  DS.B     1        Inverse video flag
+DO_STAT  DS.B     1        Display status line or not
 CONF_VAR DS.W     0        word boundary
 CONF_BIN DS.B     1        Confirmed Telnet binary transmission option
 CONF_ECH DS.B     1        Confirmed Telnet echo option
@@ -151,6 +156,7 @@ XFERPROT DS.B     1        File transfer protocol
 YMODEM_G DS.B     1        <>0 when receiving Ymodem-G
          DS.W     0        Next areas should be word-aligned
 COMNAME  DS.B     48       Name of comm device (only if TCP or cmd line)
+HOSTNAME DS.B     38       Name or phone number of host
 FNAMBUF  DS.B     48       Buffer for file name (full name)
          DS.W     0        Next areas are word aligned
 PARBUF   DS.B     80       ESC sequence parameter buffer

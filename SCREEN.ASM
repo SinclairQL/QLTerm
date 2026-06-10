@@ -26,7 +26,7 @@
 
          XDEF     SCRJOB
 
-         XREF     TXCHR,TXCHR_A,TXSTR,MAINWINP,T_WAIT,DEFRXBUF
+         XREF     TXCHR,TXCHR_A,TXSTR,MAINWINP,T_WAIT,DEFRXBUF,DEFBELL
 
          DATA     0
 
@@ -94,50 +94,50 @@ SCRJ_WT2 MOVE.L   TSERIN(A6),A0     When using pipes, simply wait until
 
 SCRJBLP  MOVE.L   Q_NXTOUT(A2),A1
          CMPA.L   Q_NEXTIN(A2),A1
-         BEQ      SCRJBLP1          If not, loop back
-SCRJB_GT MOVE.B   (A1),D1           Get first byte
+         BEQ      SCRJBLP1          ; If not, loop back
+SCRJB_GT MOVE.B   (A1),D1           ; Get first byte
 ;         TST.B    PARITY(A6)
 ;         IF GE THEN
 ;            ANDI.B   #$7F,D1        Strip off any parity
 ;         ENDIF
-         TST.B    XOFFMOD(A6)       Remote has been XOFF'ed?
-         BEQ.S    TST_ESC           no
+         TST.B    XOFFMOD(A6)       ; Remote has been XOFF'ed?
+         BEQ.S    TST_ESC           ; no
          MOVE.L   Q_NEXTIN(A2),D2
          SUB.L    A1,D2
          BGE.S    SCRJB_GE
          ADD.L    Q_END(A2),D2
          SUB.L    A2,D2
          SUBI.L   #Q_QUEUE,D2
-SCRJB_GE CMPI.L   #32,D2            D2 = free space in buffer
-         BGT.S    TST_ESC           if more than 32, turn remote on again
+SCRJB_GE CMPI.L   #32,D2            ; D2 = free space in buffer
+         BGT.S    TST_ESC           ; if more than 32, turn remote on again
          MOVE.B   D1,D2
          MOVEQ    #XON,D1
          MOVEQ    #0,D3
          JSR      TXCHR_A
          MOVE.B   D2,D1
          TST.L    D0
-         BNE.S    TST_ESC           ...but check if XON could be sent
-         SF       XOFFMOD(A6)       successfully
+         BNE.S    TST_ESC           ; ...but check if XON could be sent
+         SF       XOFFMOD(A6)       ; successfully
 TST_ESC  MOVE.L   MAINWIN(A6),A0
          MOVEQ    #-1,D3
-         TST.B    ESCMOD(A6)        Are we in an escape sequence?
-         BNE      GO_ESC            yes
-         MOVEM.L  D1/A1,-(A7)       Now it looks that we've got something to
-         QDOS     SD.CURS           print, so disable the cursor
+         TST.B    ESCMOD(A6)        ; Are we in an escape sequence?
+         BNE      GO_ESC            ; yes
+         MOVEM.L  D1/A1,-(A7)       ; Now it looks that we've got something to
+         QDOS     SD.CURS           ; print, so disable the cursor
          MOVEM.L  (A7)+,D1/A1
          CMPI.B   #$7F,D1
          BEQ.S    TST_ESC2
          CMPI.B   #$20,D1
-         BHS.S    OUTCHR2           Jump if it's surely no ctrl code
-TST_ESC2 BSR      UPD_TAIL          Update the queue's ptr
-         BSR.S    OUT_LOGB          Log it if necessary
+         BHS.S    OUTCHR2           ; Jump if it's surely no ctrl code
+TST_ESC2 BSR      UPD_TAIL          ; Update the queue's ptr
+         BSR.S    OUT_LOGB          ; Log it if necessary
          LEA      CTRLTBL,A4
-         BSR      LOOKTBL           Now lookup the code
-         BNE.S    OUTCHR            If not recognised, just print it
-         QDOS     SD.DONL           Activate any pending NL's
-         JSR      (A4)              ...and do it!
+         BSR      LOOKTBL           ; Now lookup the code
+         BNE      SCRJBLP           ; Don't print unrecognised ctrl's
+         QDOS     SD.DONL           ; Activate any pending NL's
+         JSR      (A4)              ; ...and do it!
          BRA      SCRJBLP
-OUTCHR   QDOS     IO.SBYTE          Print one character
+OUTCHR   QDOS     IO.SBYTE          ; Print one character
          BRA      SCRJBLP
 
 * This loop deals with printable characters
@@ -158,8 +158,9 @@ OUTCH_LP ADDQ.L   #1,A3
          CMPI.B   #$7F,D1
          BNE      OUTCH_LP
          BRA.S    OUTCH_EN
-OUTCH_TP LEA      Q_QUEUE(A2),A3
-         MOVE.L   A3,Q_NXTOUT(A2)
+OUTCH_TP MOVEQ    #Q_QUEUE,D0
+         ADD.L    A2,D0
+         MOVE.L   D0,Q_NXTOUT(A2)
          BRA.S    OUTCH_E2
 OUTCH_EN MOVE.L   A3,Q_NXTOUT(A2)
 OUTCH_E2 MOVE.L   A3,D2
@@ -288,7 +289,7 @@ A_GO_RTN CMPI.B   #' ',D1
          BSR.S    LOOKTBL           Lookup code in ANSI table
          BNE      ESC_END
          MOVE.W   D2,D7
-         LSR.W    #8,D7             D7 = # of parameters
+         LSR.W    #8,D7             ; D7 = default value for param
          LEA      PARBUF(A6),A3     ; parameter buffer
          BSR      A_EVAL            ; evaluate 
          BRA      GO_ESC1           ; and go to the handler routine
@@ -376,7 +377,9 @@ A_ESCTBL DC.B     0,'D'
 * CSI ANSI control codes
 * Each entry has # of params in MSB followed by code in LSB
 
-A_CMDTBL DC.B     1,'I'
+A_CMDTBL DC.B     1,'G'
+         DC.W     CHA-*
+         DC.B     1,'I'
          DC.W     CHT-*
          DC.B     1,'E'
          DC.W     CNL-*
@@ -429,7 +432,9 @@ A_CMDTBL DC.B     1,'I'
 ESCAPE   ST       ESCMOD(A6)
 ESC_RTS  RTS
 
-BEEP     LEA      IPC_PARM,A3
+BEEP     MOVE.B   DEFBELL(PC),D0    ; check option
+         BEQ.S    ESC_RTS
+         LEA      IPC_PARM,A3
          QDOS     MT.IPCOM
          RTS
 IPC_PARM DC.B     $0A,8,$55,$55,$AA,$AA,5,5,0,0,144,13,0,0,1
@@ -539,14 +544,14 @@ GETPOS   SUBQ.W   #8,A7
          MOVEM.W  (A7)+,D1-D2
          RTS
 
-CUB      NEG.W    D7
-CHT
-CUF
+CUB      NEG.W    D7                ; cursor back
+CHT                                 ; HT
+CUF                                 ; cursor forward
 HPR      BSR      GETPOS
          ADD.W    D7,D1
          BRA.S    A_SETPOS
-CUU      NEG.W    D7
-CUD
+CUU      NEG.W    D7                ; cursor up
+CUD                                 ; cursor down
 VPR      BSR      GETPOS
          ADD.W    D7,D2
          BRA.S    A_SETPOS
@@ -554,35 +559,41 @@ VPA      BSR      GETPOS
          SUBQ.W   #1,D7
          MOVE.W   D7,D2
          BRA.S    A_SETPOS
-CUP      SUBQ.W   #1,D7
-         MOVE.W   D7,D2
-         MOVEQ    #1,D7
+CUP      SUBQ.W   #1,D7             ; cursor position
+         MOVE.W   D7,D2             ; line #
+         MOVEQ    #1,D7             ; default column
          BSR      A_EVAL
          SUBQ.W   #1,D7
-         MOVE.W   D7,D1
-A_SETPOS QDOS     SD.POS
-         RTS
+         MOVE.W   D7,D1             ; column #
+A_SETPOS MOVE.W   D1,-(A7)          ; save column
+         QDOS     SD.POS
+         MOVE.W   (A7)+,D1
+         TST.L    D0                ; OK?
+         BEQ.S    CUP_RTS           ; yes, exit
+         QDOS     SD.TAB            ; try again setting only column
+CUP_RTS  RTS
 
-HPA      SUBQ.W   #1,D7
+CHA      
+HPA      SUBQ.W   #1,D7             ; set column
          MOVE.W   D7,D1
          QDOS     SD.TAB
          RTS
 
-CNL      BSR      GETPOS
+CNL      BSR      GETPOS            ; move cursor down n lines
          MOVEQ    #0,D1
          ADD.W    D7,D2
-         CMP.W    D5,D2
-         BLT      A_SETPOS
+         CMP.W    D5,D2             ; check against bottom line
+         BLT      A_SETPOS          ; OK, in range
          MOVEQ    #1,D7
          ADD.W    D2,D7
          SUB.W    D5,D7
-         BSR.S    SU
+         BSR.S    SU                ; scroll up
          MOVEQ    #0,D1
          MOVE.W   D5,D2
          SUBQ.W   #1,D2
          BRA      A_SETPOS
 
-CPL      BSR      GETPOS
+CPL      BSR      GETPOS            ; move cursor up n lines
          MOVEQ    #0,D1
          SUB.W    D7,D2
          BGE      A_SETPOS
@@ -593,41 +604,45 @@ CPL      BSR      GETPOS
          MOVEQ    #0,D2
          BRA      A_SETPOS
 
-SU       MULS     #-10,D7
+SU       MULS     #-10,D7           ; scroll up
          BRA.S    A_SCROLL
-SD       MULU     #10,D7
+SD       MULU     #10,D7            ; scroll down
 A_SCROLL MOVE.W   D7,D1
          QDOS     SD.SCROL
          RTS
 
-SL       MULS     #-6,D7
+SL       MULS     #-6,D7            ; scroll left
          BRA.S    A_PAN
-SR_      MULU     #6,D7
+SR_      MULU     #6,D7             ; scroll right
 A_PAN    MOVE.W   D7,D1
          QDOS     SD.PAN
 EL_END   RTS
 
 EL_AGAIN BSR      A_EVAL
          BLT      EL_END
-EL       SUBQ.B   #1,D7
+EL       SUBQ.B   #1,D7             ; CSI 1 K = erase from begin line to cursor
          BEQ.S    EL_START
          MOVEQ    #SD.CLRLN&$FF,D0
-         TST.B    D7
+         TST.B    D7                ; CSI 1 K = erase cursor line
          BGT.S    EL_TRP3
-         MOVEQ    #SD.CLRRT&$FF,D0
-EL_TRP3  TRAP     #3
-         BRA      EL_AGAIN
-EL_START BSR.S    CLSTART
+         MOVEQ    #SD.CLRRT&$FF,D0  ; CSI 0 K = erase from cursor to end
+EL_TRP3  TRAP     #3                ; do the operation
+         BRA      EL_AGAIN          ; and look for more
+EL_START BSR.S    CLSTART           ; clear from start to cursor
          BRA      EL_AGAIN
 
-CLSTART  BSR      GETPOS
-         MOVE.W   D1,D2
-         MOVEQ    #0,D1
+; subroutine to clear line from start to cursor
+; unfortunately, there's no QDOS trap for this so we have to
+; just print spaces :(
+
+CLSTART  BSR      GETPOS            ; get current position
+         MOVE.W   D1,D2             ; save column position
+         MOVEQ    #0,D1             ; move to start of line
          QDOS     SD.TAB
 EL_LOOP  MOVEQ    #' ',D1
-         QDOS     IO.SBYTE
-         DBF      D2,EL_LOOP
-         QDOS     SD.PCOL
+         QDOS     IO.SBYTE          ; now print spaces
+         DBF      D2,EL_LOOP        ; until current column
+         QDOS     SD.PCOL           ; go back one position 
 ED_END   RTS
 
 ED_AGAIN BSR      A_EVAL
@@ -644,55 +659,83 @@ ED_CLE   QDOS     SD.CLRRT
 ED_CLS   QDOS     SD.CLEAR
          BRA      ED_AGAIN
 
+SGR_TAB  DC.W     0
+         DC.W     RES_ALL-*
+         DC.W     4
+         DC.W     UL_ON-*
+         DC.W     7
+         DC.W     INV_ON-*
+         DC.W     24
+         DC.W     UL_ON-*
+         DC.W     27
+         DC.W     INV_OFF-*
+         DC.W     -1
+
 SGR_AGN  BSR      A_EVAL
-         BLT      SGR_RTS
-SGR      TST.B    D7
-         BEQ.S    RES_ALL           ; code 0: reset all
-         SUBQ.B   #4,D7
-         BNE.S    SGR_2
-         MOVEQ    #1,D1             ; code 4: set underline
-         QDOS     SD.SETUL
+         BLT.S    SGR_RTS
+SGR      LEA      SGR_TAB(PC),A1
+SGR_LOOP MOVE.W   (A1)+,D0
+         BMI.S    SGR_3
+         MOVE.W   (A1)+,D1
+         CMP.B    D7,D0
+         BNE      SGR_LOOP
+         LEA      -2(A1,D1.W),A1
+         JSR      (A1)
          BRA      SGR_AGN
-SGR_2    SUBQ.B   #3,D7             ; code 7: reverse video
-         BNE.S    SGR_3
-         MOVE.L   A2,-(A7)
+
+UL_ON    CMPI.B   #4,D7
+         SEQ      D1
+         ANDI.W   #1,D1             ; parameter 4 ON, 24 OFF
+         QDOS     SD.SETUL
+         RTS
+
+INV_ON   TAS      INV_VID(A6)       ; check if already inverse
+         BNE.S    SGR_RTS
+         BRA.S    INV_2
+INV_OFF  TST.B    INV_VID(A6)
+         BEQ.S    SGR_RTS
+         SF       INV_VID(A6)
+INV_2    MOVE.L   A2,-(A7)          ; save queue ptr
          LEA      GETCOL,A2
-         QDOS     SD.EXTOP
+         QDOS     SD.EXTOP          ; get current colours
          MOVE.L   (A7)+,A2
-         MOVE.W   D1,D2
-         QDOS     SD.SETST
+         MOVE.W   D1,D2             ; D1 msw=strip, D1 lsw=ink
+         QDOS     SD.SETST          ; swap strip and ink colour
          MOVE.W   D2,D1
          LSR.W    #8,D1
          QDOS     SD.SETIN
-         BRA      SGR_AGN
+SGR_RTS  RTS
 
 * Handle colour
 
-SGR_3    TST.B    COLRMOD(A6)
-         BEQ      SGR_AGN           Ignore when in B&W mode
+SGR_3    PEA      SGR_AGN           ; loop back after following handlers
+         TST.B    COLRMOD(A6)
+         BEQ.S    SGR_RTS           ; Ignore when in B&W mode
          LEA      A_COLTB4,A4
-         CMPI.B   #1,COLRMOD(A6)    4-colour mode?
+         CMPI.B   #1,COLRMOD(A6)    ; 4-colour mode?
          IF NE THEN
-            LEA      A_COLTBL,A4    No, use 8-colour table
+            LEA      A_COLTBL,A4    ; No, use 8-colour table
          ENDIF
-         SUBI.B   #30-7,D7
-         CMPI.B   #7,D7
+         SUBI.B   #30,D7
+         CMPI.B   #7,D7             
          BHI.S    SGR_4
          MOVE.B   (A4,D7.W),D1      ; codes 30-37
-         QDOS     SD.SETIN          Set ink colour
-         BRA      SGR_AGN
+         QDOS     SD.SETIN          ; Set ink colour
+         RTS
+         
 SGR_4    SUBI.B   #10,D7
          CMPI.B   #7,D7
-         BHI      SGR_AGN
+         BHI      SGR_RTS
          MOVE.B   (A4,D7.W),D1      ; codes 40-47
-         QDOS     SD.SETPA          Set paper colour
+         QDOS     SD.SETPA          ; Set paper colour
          MOVE.B   (A4,D7.W),D1
-         QDOS     SD.SETST          And strip colour
-         BRA      SGR_AGN
+         QDOS     SD.SETST          ; And strip colour
+         RTS
 
 * Reset all - no underline and standard colours
 
 RES_ALL  MOVEQ    #0,D1
+         MOVE.B   D1,INV_VID(A6)    ; reset inverse video
          QDOS     SD.SETUL
          MOVE.B   MAINWINP+2,D1
          QDOS     SD.SETPA
@@ -700,18 +743,18 @@ RES_ALL  MOVEQ    #0,D1
          QDOS     SD.SETST
          MOVE.B   MAINWINP+3,D1
          QDOS     SD.SETIN
-         BRA      SGR_AGN
-SGR_RTS  RTS
+         RTS
 
 A_COLTB4 DC.B     0,2,4,6,2,3,5,7   Colour table for 4-colour mode
 A_COLTBL DC.B     0,2,4,6,1,3,5,7   Colour table for 8-colour mode
 
 * EXTOP call for retrieving current colours
+* Returns: D1 msb STRIP colour, D1 lsb INK colour
 
-GETCOL   LEA      $45(A0),A1
+GETCOL   LEA      $45(A0),A1        ; STRIP colour
          MOVE.B   (A1)+,D1
          LSL.W    #8,D1
-         MOVE.B   (A1),D1
+         MOVE.B   (A1),D1           ; INK colour
          MOVEQ    #0,D0
          RTS
 

@@ -229,7 +229,7 @@ txs_echo sf       txbusy(a6)        ; clear flag
          move.l   4*4(a7),a1        ; restore original a1
 txs_loc  trap     #0                ; don't allow serjob to write to buffer
          move.l   rxq_base(a6),a2   ; base of queue header
-         move.l   q_nextin(a6),a3   ; head of queue
+         move.l   q_nextin(a2),a3   ; head of queue
 txs_llp  subq.w   #1,d2             ; discount one char
          blt.s    txs_end           ; exit if done
          move.b   (a1)+,(a3)+       ; copy char
@@ -380,7 +380,7 @@ sj_getsp move.l   q_nxtout(a2),d1
          subq.l   #1,d2                 ; but avoid bumping into nxtout
          ble.s    sj_wait               ; no room in queue, wait
 sj_fetch cmp.l    d7,d2                 ; test against $7fff
-         bls.s    sj_lp2
+         bls.s    sj_fstr
          move.l   d7,d2                 ; io.fstrg cannot handle more
 sj_fstr  moveq    #0,d3                 ; .. in one try
          qdos     io.fstrg              ; get string, at most d2 bytes
