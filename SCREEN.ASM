@@ -133,11 +133,15 @@ TST_ESC2 BSR      UPD_TAIL          ; Update the queue's ptr
          BSR.S    OUT_LOGB          ; Log it if necessary
          LEA      CTRLTBL,A4
          BSR      LOOKTBL           ; Now lookup the code
-         BNE      SCRJBLP           ; Don't print unrecognised ctrl's
+         BNE.S    BAD_CTRL          ; Don't print unrecognised ctrl's
          QDOS     SD.DONL           ; Activate any pending NL's
          JSR      (A4)              ; ...and do it!
          BRA      SCRJBLP
 OUTCHR   QDOS     IO.SBYTE          ; Print one character
+         BRA      SCRJBLP
+
+BAD_CTRL LOAD$    {'Unknown ctrl code '},A1
+         JSR      DEBUGMSG
          BRA      SCRJBLP
 
 * This loop deals with printable characters
@@ -213,13 +217,17 @@ GO_ESC   BSR      UPD_TAIL          first update queue tail
          BEQ.S    EXPT_PAR          ...so start collecting parameters
          LEA      ESCTBL,A4         Lookup any other escape char in VT52 table
          BSR      LOOKTBL
-         BNE.S    ESC_END           If not found, reset and loop back
+         BNE.S    BAD_VT52          If not found, reset and loop back
          LSR.W    #8,D2             MSB of D2 is # of parameters
          BEQ.S    GO_ESC1           if no parameters, just do it now
          MOVE.L   A4,ESCRTN(A6)     Else, keep address of handler and set
          MOVE.B   D2,PARNUM(A6)     number of expected parameters
          CLR.W    PB_PNT(A6)
          BRA      SCRJBLP           ... and loop back for next char
+
+BAD_VT52 LOAD$    {'Unknown VT52 code '},A1
+         JSR      DEBUGMSG
+         BRA.S    ESC_END
 
 * Handle parameters of VT52 sequence, just single character codes
 
@@ -253,9 +261,9 @@ ESC_END  SF       ESCMOD(A6)        End of escape handling, reset flags
 
 * Start collecting parameters for CSI ANSI sequences
 
-EXPT_PAR ST       PARNUM(A6)        PARNUM=-1 to indicate 'undetermined'
-         CLR.W    PB_PNT(A6)
-         BRA      SCRJBLP
+EXPT_PAR ST       PARNUM(A6)        ; PARNUM=-1 to indicate 'undetermined'
+         CLR.W    PB_PNT(A6)        ; reset pointer to current param
+         BRA      SCRJBLP           ; loop back
 
 * Get next parameter
 
@@ -278,39 +286,42 @@ SCRJBL1  BRA      SCRJBLP
 * Non-numeric or separator code, so must be command
 
 A_GO_RTN CMPI.B   #' ',D1
-         BEQ.S    A_SPACE           ???
+         BEQ.S    A_SPACE           ; ???
          MOVE.W   PB_PNT(A6),D0
          CLR.B    (A3,D0.W)         ; terminate parameter list
          TST.B    ESCMOD(A6)
          IF GT THEN
-            ORI.B    #$80,D1        SL or SR, really needed?
+            ORI.B    #$80,D1        ; SL or SR, really needed?
          ENDIF
          LEA      A_CMDTBL,A4
-         BSR.S    LOOKTBL           Lookup code in ANSI table
-         BNE      ESC_END
+         BSR.S    LOOKTBL           ; Lookup code in ANSI table
+         BNE.S    BAD_CSI
          MOVE.W   D2,D7
          LSR.W    #8,D7             ; D7 = default value for param
          LEA      PARBUF(A6),A3     ; parameter buffer
          BSR      A_EVAL            ; evaluate 
          BRA      GO_ESC1           ; and go to the handler routine
 A_SPACE  ANDI.B   #1,ESCMOD(A6)
-         BRA      SCRJBL1
+         BRA      SCRJBLP
+
+BAD_CSI  LOAD$    {'Unknown CSI code '},A1
+         JSR      DEBUGMSG
+         BRA      ESC_END
 
 * Lookup code in a table
 * Table entries: code (word) followed by handler offset (word), end marker = 0
 * Call: D1.B code to lookup, A4 pointer to table
 * Return: D0 error code, D2.W table entry, A4 address of handler
 
+LOOKTBL1 ADDQ.W   #2,A4             ; skip to next entry
 LOOKTBL  MOVE.W   (A4)+,D2
          BEQ.S    LKTBL_NF
          CMP.B    D1,D2
-         BEQ.S    LKTBL_FN
-         ADDQ.W   #2,A4
-         BRA      LOOKTBL
-LKTBL_FN ADDA.W   (A4),A4
+         BNE.S    LOOKTBL1
+         ADDA.W   (A4),A4           ; get address of handler
          MOVEQ    #0,D0
          RTS
-LKTBL_NF MOVEQ    #ERR.NF,D0
+LKTBL_NF MOVEQ    #ERR.NF,D0        ; not found
          RTS
 
 CTRLTBL  DC.W     7
@@ -375,7 +386,7 @@ A_ESCTBL DC.B     0,'D'
          DC.W     0
 
 * CSI ANSI control codes
-* Each entry has # of params in MSB followed by code in LSB
+* Each entry has default value in MSB followed by code in LSB
 
 A_CMDTBL DC.B     1,'G'
          DC.W     CHA-*
@@ -395,6 +406,8 @@ A_CMDTBL DC.B     1,'G'
          DC.W     CUP-*
          DC.B     1,'A'
          DC.W     CUU-*
+         DC.B     1,'P'
+         DC.W     DCH-*
          DC.B     0,'n'
          DC.W     DSR-*
          DC.B     0,'J'
@@ -405,10 +418,14 @@ A_CMDTBL DC.B     1,'G'
          DC.W     HPA-*
          DC.B     1,'a'
          DC.W     HPR-*
+         DC.B     1,'@'
+         DC.W     ICH-*
          DC.B     1,'f'
          DC.W     CUP-*
          DC.B     0,'u'
          DC.W     RCP-*
+         DC.B     0,'l'
+         DC.W     RM-*
          DC.B     0,'s'
          DC.W     SCP-*
          DC.B     1,'T'
@@ -417,6 +434,8 @@ A_CMDTBL DC.B     1,'G'
          DC.W     SGR-*
          DC.B     1,'@'+$80
          DC.W     SL-*
+         DC.B     0,'h'
+         DC.W     SM-*
          DC.B     1,'A'+$80
          DC.W     SR_-*
          DC.B     1,'S'
@@ -429,37 +448,39 @@ A_CMDTBL DC.B     1,'G'
 
 * ESCAPE   TST.B    SCRMOD(A6)
 *          BLT.S    ESC_RTS
-ESCAPE   ST       ESCMOD(A6)
+ESCAPE   ST       ESCMOD(A6)        ; set escape mode
 ESC_RTS  RTS
 
-BEEP     MOVE.B   DEFBELL(PC),D0    ; check option
+BEEP     MOVE.B   DEFBELL(PC),D0    ; check option first
          BEQ.S    ESC_RTS
          LEA      IPC_PARM,A3
          QDOS     MT.IPCOM
          RTS
 IPC_PARM DC.B     $0A,8,$55,$55,$AA,$AA,5,5,0,0,144,13,0,0,1
 
-DEL      BSR.S    BSP
-         MOVEQ    #' ',D1
+* VT52 escape codes
+
+DEL      BSR.S    BSP               ; go back one char
+         MOVEQ    #' ',D1           ; and rub it out
          QDOS     IO.SBYTE
 
-BSP      MOVEQ    #SD.PCOL&$FF,D0
+BSP      MOVEQ    #SD.PCOL&$FF,D0   ; backspace
          BRA.S    DOTRP
-HTAB     MOVEQ    #SD.NCOL&$FF,D0
+HTAB     MOVEQ    #SD.NCOL&$FF,D0   ; horizontal tab (1 char)
          BRA.S    DOTRP
-VT_UP    MOVEQ    #SD.PROW&$FF,D0
+VT_UP    MOVEQ    #SD.PROW&$FF,D0   ; move cursor up
          BRA.S    DOTRP
-VT_DOWN  MOVEQ    #SD.NROW&$FF,D0
+VT_DOWN  MOVEQ    #SD.NROW&$FF,D0   ; move cursor down
          BRA.S    DOTRP
-CLRSCR   MOVEQ    #SD.CLEAR&$FF,D0
+CLRSCR   MOVEQ    #SD.CLEAR&$FF,D0  ; clear window
          BRA.S    DOTRP
-CLRBOT   QDOS     SD.CLRBT
-CLRRT    MOVEQ    #SD.CLRRT&$FF,D0
+CLRBOT   QDOS     SD.CLRBT          ; clear to bottom of window
+CLRRT    MOVEQ    #SD.CLRRT&$FF,D0  ; clear from cursor to end of line
          BRA.S    DOTRP
-HOME     MOVEQ    #0,D1
+HOME     MOVEQ    #0,D1             ; set cursor home
          MOVEQ    #0,D2
          BRA.S    SETPOS1
-SETPOS   MOVE.B   (A3)+,D2
+SETPOS   MOVE.B   (A3)+,D2          ; set cursor position
          SUBI.B   #$20,D2
          MOVE.B   (A3),D1
          SUBI.B   #$20,D1
@@ -469,12 +490,12 @@ TAB8     BSR      GETPOS            ; Get current position
          ADDQ.W   #8,D1             ; advance to next tab stop
          ANDI.W   #256-8,D1         ; .. which is a multiple of 8
          BRA.S    SDTAB
-CRET     MOVEQ    #0,D1
+CRET     MOVEQ    #0,D1             ; CR
 SDTAB    MOVEQ    #SD.TAB&$FF,D0
          BRA.S    DOTRP
-SETIN    MOVEQ    #SD.SETIN&$FF,D0
+SETIN    MOVEQ    #SD.SETIN&$FF,D0  ; set foreground
          BRA.S    SETCOL
-SETST    MOVEQ    #SD.SETST&$FF,D0
+SETST    MOVEQ    #SD.SETST&$FF,D0  ; set background
          BRA.S    SETCOL
 SETPA    MOVEQ    #SD.SETPA&$FF,D0
 SETCOL   TST.B    COLRMOD(A6)
@@ -512,6 +533,10 @@ DOTRP2   TRAP     #3
 * Return: D0 error code, D7 value read, A3 updated
 
 A_EVAL   MOVEQ    #-1,D0            ; no parameter yet
+         CMPI.B   #'?',(A3)         ; NEW: test for private code '?'
+         IF EQ THEN
+            ADDQ.W   #1,A3          ; skip 
+         ENDIF
          CMPI.B   #'0',(A3)
          BLT.S    EVAL_END
          CMPI.B   #'9',(A3)
@@ -528,10 +553,8 @@ EVAL_LP  MOVE.B   (A3),D0
          BRA      EVAL_LP
 
 EVAL_END CMPI.B   #';',(A3)         ; separator?
-         BEQ.S    EVAL_NXT          ; yes, skip
-         CMPI.B   #'?',(A3)         ; NEW: test for private code '?'
-         BNE.S    EVAL_RT
-EVAL_NXT ADDQ.W   #1,A3             ; skip to next char
+         BNE.S    EVAL_RT           ; no, return
+         ADDQ.W   #1,A3             ; skip to next char
 EVAL_RT  TST.L    D0
          RTS
 
@@ -604,19 +627,26 @@ CPL      BSR      GETPOS            ; move cursor up n lines
          MOVEQ    #0,D2
          BRA      A_SETPOS
 
-SU       MULS     #-10,D7           ; scroll up
+SU       MULS     #-YINC,D7           ; scroll up
          BRA.S    A_SCROLL
-SD       MULU     #10,D7            ; scroll down
+SD       MULU     #YINC,D7            ; scroll down
 A_SCROLL MOVE.W   D7,D1
          QDOS     SD.SCROL
          RTS
 
-SL       MULS     #-6,D7            ; scroll left
+SL       MULS     #-XINC,D7            ; scroll left
          BRA.S    A_PAN
-SR_      MULU     #6,D7             ; scroll right
+SR_      MULU     #XINC,D7             ; scroll right
 A_PAN    MOVE.W   D7,D1
          QDOS     SD.PAN
 EL_END   RTS
+
+DCH      MULS     #-XINC,D7
+         BRA.S    A_PANRT
+ICH      MULU     #XINC,D7
+A_PANRT  MOVE.W   D7,D1
+         QDOS     SD.PANRT
+         RTS
 
 EL_AGAIN BSR      A_EVAL
          BLT      EL_END
@@ -659,94 +689,232 @@ ED_CLE   QDOS     SD.CLRRT
 ED_CLS   QDOS     SD.CLEAR
          BRA      ED_AGAIN
 
-SGR_TAB  DC.W     0
+* CSI SGR codes
+
+SGR_TAB  DC.W     0                 ; reset all
          DC.W     RES_ALL-*
-         DC.W     4
+         DC.W     1                 ; bold (or alternative colour)
+         DC.W     BOLD_ON-*
+         DC.W     4                 ; underline on
          DC.W     UL_ON-*
-         DC.W     7
+         DC.W     5
+         DC.W     SGR_RTS-*         ; Blink not supported yet...
+         DC.W     7                 ; Inverse
          DC.W     INV_ON-*
-         DC.W     24
+         DC.W     22                ; cancel bold
+         DC.W     BOLD_OFF-*
+         DC.W     24                ; cancel underline
          DC.W     UL_ON-*
-         DC.W     27
+         DC.W     25                ; cancel blinking
+         DC.W     SGR_RTS-*
+         DC.W     27                ; cancel inverse
          DC.W     INV_OFF-*
          DC.W     -1
 
-SGR_AGN  BSR      A_EVAL
-         BLT.S    SGR_RTS
-SGR      LEA      SGR_TAB(PC),A1
-SGR_LOOP MOVE.W   (A1)+,D0
-         BMI.S    SGR_3
-         MOVE.W   (A1)+,D1
-         CMP.B    D7,D0
-         BNE      SGR_LOOP
-         LEA      -2(A1,D1.W),A1
-         JSR      (A1)
-         BRA      SGR_AGN
+* Main loop for SGR
 
-UL_ON    CMPI.B   #4,D7
+SGR_AGN  BSR      A_EVAL            ; evaluate next param
+         BLT.S    SGR_RTS           ; exit when none found
+
+SGR      LEA      SGR_TAB(PC),A1    ; table of SGR codes
+SGR_LOOP MOVE.W   (A1)+,D0          ; get code
+         BMI      SGR_3             ; not in table, try colour codes
+         MOVE.W   (A1)+,D1          ; offset to handler
+         CMP.B    D7,D0             ; match?
+         BNE      SGR_LOOP          ; no, try next
+         LEA      -2(A1,D1.W),A1    ; get handler address in A1
+         JSR      (A1)              ; call it
+         BRA      SGR_AGN           ; and loop back
+
+* Reset all - no underline and standard colours
+
+RES_ALL  BSR.S    BOLD_OFF
+         BSR      INV_OFF
+         MOVEQ    #0,D1
+         QDOS     SD.SETUL          ; reset underline script
+         MOVEQ    #0,D1
+         MOVEQ    #0,D2
+         BSR      SET_COLR          ; reset background
+         MOVEQ    #7,D1
+         MOVEQ    #1,D2
+         BSR      SET_COLR          ; reset foreground
+SGR_RTS  RTS
+
+BOLD_ON  TAS      BOLDFLG(A6)       ; test if already Bold
+         BNE      SGR_RTS           ; yes, exit
+         MOVEQ    #1,D2             ; change ink colour
+         MOVEQ    #7,D1             ; assume mono mode, set to white
+         TST.B    COLRMOD(A6)       ; mono mode?
+         BEQ      SET_COLR          ; yes, set colour
+         CMPI.B   #COL_16,COLRMOD(A6) ; using 16 colours?
+         BNE      SGR_RTS           ; no, ignore
+         MOVE.B   FGCOLOUR(A6),D1   ; get current ink
+         CMPI.B   #7,D1             ; already using bright colours?
+         BHI      SGR_RTS           ; yes, ignore
+         ADDQ.B   #8,D1             ; change colour to bright variant
+         BRA      SET_COLR
+
+BOLD_OFF TST.B    BOLDFLG(A6)       ; using bold?
+         BEQ      SGR_RTS           ; no, exit
+         SF       BOLDFLG(A6)       ; clear flag
+         MOVEQ    #1,D2             ; change ink colour
+         MOVEQ    #4,D1             ; assume mono, set to green
+         TST.B    COLRMOD(A6)       ; mono mode?
+         BEQ.S    SET_COLR          ; yes, set ink
+         CMPI.B   #COL_16,COLRMOD(A6) ; using 16 colours?
+         BNE      SGR_RTS           ; no, ignore
+         MOVE.B   FGCOLOUR(A6),D1   ; get current ink
+         SUBQ.B   #8,D1             ; change bright colours to normal
+         BLT      SGR_RTS           ; but don't change normal colours
+         BRA.S    SET_COLR
+
+UL_ON    CMPI.B   #4,D7             ; entry point for underline on/off
          SEQ      D1
          ANDI.W   #1,D1             ; parameter 4 ON, 24 OFF
          QDOS     SD.SETUL
          RTS
 
 INV_ON   TAS      INV_VID(A6)       ; check if already inverse
-         BNE.S    SGR_RTS
+         BNE      SGR_RTS
          BRA.S    INV_2
 INV_OFF  TST.B    INV_VID(A6)
-         BEQ.S    SGR_RTS
+         BEQ      SGR_RTS
          SF       INV_VID(A6)
-INV_2    MOVE.L   A2,-(A7)          ; save queue ptr
-         LEA      GETCOL,A2
-         QDOS     SD.EXTOP          ; get current colours
-         MOVE.L   (A7)+,A2
-         MOVE.W   D1,D2             ; D1 msw=strip, D1 lsw=ink
-         QDOS     SD.SETST          ; swap strip and ink colour
-         MOVE.W   D2,D1
-         LSR.W    #8,D1
-         QDOS     SD.SETIN
-SGR_RTS  RTS
+INV_2    MOVE.B   BGCOLOUR(A6),D4   ; save current paper/strip
+         MOVE.B   FGCOLOUR(A6),D1   ; get current ink
+         MOVEQ    #0,D2             ; change paper/strip
+         BSR.S    SET_COLR
+         MOVE.B   D4,D1             ; new ink = old paper/strip
+         MOVEQ    #1,D2
+         BRA.S    SET_COLR
 
-* Handle colour
+* Handle colour codes
 
 SGR_3    PEA      SGR_AGN           ; loop back after following handlers
-         TST.B    COLRMOD(A6)
-         BEQ.S    SGR_RTS           ; Ignore when in B&W mode
-         LEA      A_COLTB4,A4
-         CMPI.B   #1,COLRMOD(A6)    ; 4-colour mode?
-         IF NE THEN
-            LEA      A_COLTBL,A4    ; No, use 8-colour table
-         ENDIF
+         MOVE.B   COLRMOD(A6),D0
+         BEQ      SGR_RTS           ; Ignore when in mono mode
+         MOVE.W   D7,D1             ; save D7 for BAD_SGR
          SUBI.B   #30,D7
-         CMPI.B   #7,D7             
-         BHI.S    SGR_4
-         MOVE.B   (A4,D7.W),D1      ; codes 30-37
-         QDOS     SD.SETIN          ; Set ink colour
-         RTS
-         
-SGR_4    SUBI.B   #10,D7
-         CMPI.B   #7,D7
-         BHI      SGR_RTS
-         MOVE.B   (A4,D7.W),D1      ; codes 40-47
-         QDOS     SD.SETPA          ; Set paper colour
-         MOVE.B   (A4,D7.W),D1
-         QDOS     SD.SETST          ; And strip colour
+         BLT.S    BAD_SGR           ; reject anything < 30
+
+; At this point, value of D7 is:
+; 0-7:   standard foreground colour
+; 10-17: standard background colour
+; 60-67: bright foreground colour
+; 70-77: bright background colour
+
+         DIVU     #10,D7            ; separate normal & bright, fg & bg
+         MOVE.L   D7,D4
+         SWAP     D4                ; d4 now holds colour code 0-7
+         CMPI.W   #7,D4
+         BHI.S    BAD_SGR           ; but reject 8 & 9
+         MOVE.W   D4,D1             ; colour goes to D1
+         MOVEQ    #0,D2             ; assume background
+         BCLR     D2,D7             ; test & clear fg/bg bit
+         BNE.S    SGR_4
+         MOVEQ    #1,D2             ; no, it's foreground
+SGR_4    SUBQ.B   #COL_QL8,D0       ; check colour mode again
+         BLS.S    SET_COLR          ; handle QL 4 & emulated-8 colour modes
+
+SGR_16   TST.W    D7                ; 0 for normal colours, 6 for bright
+         BEQ.S    SET_COLR
+         ADDQ.W   #8,D1             ; if bright, add 8 to colour code
+
+; continue into SET_COLR
+
+* Set colours
+* Entry: D1: ANSI colour code (0-15)
+*        D2: 0 for background (paper & strip), 1 for foreground (ink)
+
+IOW.PAPT EQU      $54               ; TRAP #3 key for setting 24-bit colour
+
+SET_COLR LEA      BGCOLOUR(A6),A1
+         ANDI.W   #$FF,D1           ; ensure MSB of D1 is zero
+         MOVE.B   D1,(A1,D2.W)      ; store new colour
+         MOVE.B   COLRMOD(A6),D0    ; get colour mode
+         BEQ      SGR_RTS           ; do nothing in mono mode
+         SUBQ.B   #COL_QL8,D0       ; test for QL 4 or emulated-8 colour modes
+         BHI.S    SETCOL16          ; if >2, we are in 16 colour mode
+         LEA      A_COLTBL,A4       ; presume solid colours?
+         BLT.S    SETCOL1           ; yes
+         LEA      A_COLTB8,A4       ; use emulated 8-colours
+SETCOL1  MOVE.B   (A4,D1.W),D1      ; get QDOS colour from table
+         MOVEQ    #SD.SETPA&$FF,D0  ; use SETPA/SETST/SETIN trap
+         BRA.S    SETCOL2
+
+SETCOL16 LEA      A_COLTB16,A4      ; 16-colour code table
+         LSL.W    #2,D1             ; each entry has 24-bit colour code,
+         MOVE.L   (A4,D1.W),D1      ; but the MSB is not used here
+         MOVEQ    #IOW.PAPT,D0      ; IOW.PAPT/IOW.STRT/IOW.INKT
+SETCOL2  TST.B    D2                ; are we setting foreground colour?
+         BNE.S    SET_INK           ; yes
+         MOVEM.L  D0/D1,-(A7)       ; save trap code & colour param
+         BSR.S    SETCOL3           ; set paper
+         MOVEM.L  (A7)+,D0/D1       ; restore trap code & colour
+         ADDQ.W   #1,D0             ; set strip
+         BRA.S    SETCOL3
+SET_INK  ADDQ.W   #2,D0             ; add 2 for ink trap code
+SETCOL3  MOVEQ    #-1,D2            ; UNDOCUMENTED - needed for extended TRAPs!
+         TRAP     #3                ; do it
          RTS
 
-* Reset all - no underline and standard colours
+BAD_SGR  LOAD$    {'Unknown SGR code '},A1
+         BRA.S    DEBUGMSG
+RM       LOAD$    {'RM code '},A1
+         BRA.S    RM_SM
+SM       LOAD$    {'SM code '},A1
+RM_SM    MOVE.W   D7,D1
 
-RES_ALL  MOVEQ    #0,D1
-         MOVE.B   D1,INV_VID(A6)    ; reset inverse video
-         QDOS     SD.SETUL
-         MOVE.B   MAINWINP+2,D1
-         QDOS     SD.SETPA
-         MOVE.B   MAINWINP+2,D1
-         QDOS     SD.SETST
-         MOVE.B   MAINWINP+3,D1
-         QDOS     SD.SETIN
-         RTS
+* Print debug message at (A1) followed by hex code in D1
 
-A_COLTB4 DC.B     0,2,4,6,2,3,5,7   Colour table for 4-colour mode
-A_COLTBL DC.B     0,2,4,6,1,3,5,7   Colour table for 8-colour mode
+DEBUGMSG TST.B    ADEBUG(A6)
+         BEQ.S    DEBG_RTS
+         MOVEM.L  D1-D3/A0-A2,-(A7)
+         SUBA.L   A0,A0             ; channel 0 or 1
+         MOVE.W   UT_MTEXT,A2
+         JSR      (A2)              ; print message
+         LEA      VARS_END+4,A0       ; scrap buffer (relative to A6)
+         MOVE.L   #$00073078,-4(A6,A0.L) ; length 7 & '0x'
+         LEA      2(A7),A1          ; saved value of D1.W on stack
+         SUBA.L   A6,A1             ; make it relative to A6
+         MOVE.W   CN_ITOHW,A2
+         JSR      (A2)              ; ASCIIfy to hex
+         LEA      VARS_END(A6),A1   ; point again to buffer
+         MOVE.B   #LF,8(A1)         ; terminate message with LF
+         SUBA.L   A0,A0
+         MOVE.W   UT_MTEXT,A2
+         JSR      (A2)              ; print hex code followed by LF
+         MOVEM.L  (A7)+,D1-D3/A0-A2
+DEBG_RTS RTS
+
+
+; A_COLTB4 DC.B     0,2,4,6,2,3,5,7   Colour table for 4-colour mode
+A_COLTBL DC.B     0,2,4,6,1,3,5,7   Colour table for 4-colour (no background)
+
+* Table for converting 8-colour ANSI codes to QL colours with stipples
+
+A_COLTB8 DC.B     0,2,4,244,255,239,223,7
+
+* Table for converting 16-colour ANSI codes to 24-bit SMSQ/E codes
+* format: RRGGBB00 - I had to find out by reverse-engineering the SMSQ/E code!
+
+A_COLTB16: ;      $00RRGGBB
+         DC.L     $00000000         ; 0 = black
+         DC.L     $BF000000         ; 1 = red
+         DC.L     $00BF0000         ; 2 = green
+         DC.L     $BFBF0000         ; 3 = yellow
+         DC.L     $0000BF00         ; 4 = blue
+         DC.L     $BF00BF00         ; 5 = magenta
+         DC.L     $00BFBF00         ; 6 = cyan
+         DC.L     $BFBFBF00         ; 7 = white
+         DC.L     $80808000         ; 8 = dark grey
+         DC.L     $FF000000         ; 9 = bright red
+         DC.L     $00FF0000         ; 10 = bright green
+         DC.L     $FFFF0000         ; 11 = bright yellow
+         DC.L     $0000FF00         ; 12 = bright blue
+         DC.L     $FF00FF00         ; 13 = bright magenta
+         DC.L     $00FFFF00         ; 14 = bright cyan
+         DC.L     $FFFFFF00         ; 15 = bright white
 
 * EXTOP call for retrieving current colours
 * Returns: D1 msb STRIP colour, D1 lsb INK colour

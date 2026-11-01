@@ -1,3 +1,30 @@
+QLTerm version 3.00b3 (01/11/2026)
+==================================
+
+New features:
+-------------
+
+- Extended colour modes:
+  - 'No colour' ignores ANSI colour information, but displays 'Bold' text in an alternative colour (white vs green)
+  - '4-colour' mode is mostly the same as the old 4-colour mode on QL displays, but displays 8 colours on supported hardware under SMSQ/E. All colours are solid colours, and some of these may not be readable (e.g. blue on black or yellow on green).
+  - '8-emulated' emulates the 'missing' colours in 4-colour mode by using stipple patterns. Again, some text may be difficult to read in this mode.
+  - '16-colour' uses the extended colour modes available under SMSQ/E on supported hardware (QPC2, SMSQmulator, Q68 etc) to display 'normal' and 'bright' versions of the 8 base colours.
+  The default colour mode can be configured using menuconfig. When configured to 'Auto', QLTerm will choose the most appropriate setting according to the current display mode.
+
+- The UDP device can now be selected as communication device.
+- Command string options may now be given to override configured values and connect to a host directly at startup.
+  Synopsis: EX QLTERM;'[-b BAUD], [-c COMDEV] [-d DEV] [HOST]'
+  E.g.: **EX QLTERM;'-c Telnet 192.168.3.14'** causes QLTERM to immediately make a Telnet connection to host 192.168.3.14 at startup
+        **EX QLTERM;'-b 2400 -c custom -d ser3 1-800-555-1212'** will open a connection to custom device SER3 at 2400 baud and call number 1-800-555-1212
+- Pressing Shift-ENTER will now exit QLTERM in addition to the F3-Q command.
+
+Bug fixes:
+----------
+
+- Status window was positioned incorrectly when the top left corner Y position was set to something other than 2.
+- Saving capture ('Log') always prepended download directory to file name, even when file name contained valid device name (e.g. ram1_ram2_capture.log)
+- Incorrect enumeration of Port configuration options caused wrong default port to be configured.
+
 QLTerm Version 3.00b2 (10/6/2026)
 =================================
 
