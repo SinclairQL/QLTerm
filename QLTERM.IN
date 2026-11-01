@@ -20,13 +20,18 @@ F2       EQU      $EC
 F3       EQU      $F0
 F4       EQU      $F4
 F5       EQU      $F8
-SOH      EQU      $01
-STX      EQU      $02
-EOT      EQU      $04
-ACK      EQU      $06
-NAK      EQU      $15
-CAN      EQU      $18
-C        EQU      $43
+XINC     EQU      6        Character width in pixels
+YINC     EQU      10       Character height in pixels
+
+* X/YMODEM control chars
+
+SOH      EQU      $01      Start of block (128-byte)
+STX      EQU      $02      Start of block (1K-byte)
+EOT      EQU      $04      End of Transmission
+ACK      EQU      $06      ACKnowledge
+NAK      EQU      $15      Negative AKcnowledge
+CAN      EQU      $18      Cancel transmission
+C        EQU      $43      Call for CRC mode
 IAC      EQU      $FF      Telnet IAC escape char
 T_DONT   equ      $fe      Telnet DONT command
 T_DO     equ      $fd      Telnet DO command
@@ -61,6 +66,15 @@ XM..EOT  EQU      23       1 when first EOT ACK'ed
 
 ; RXQ_SIZE EQU      8192     Size of receive buffer
 
+* arg.str equ     <positive value 1-239: maximum length of string argument>
+arg.true equ      $f0      no argument, byte set to true if option present
+arg.byte equ      $f1      byte-sized number should follow
+arg.word equ      $f2      word-sized number should follow
+arg.long equ      $f3      long-sized number should follow
+arg.code equ      $f4      one of a list of option values should follow
+arg.conf equ      $f5      take list of option values from a CONFIG CODE item
+arg.max  equ      $f5      highest possible item typ
+
 * Input queue 
 
          offset   0
@@ -72,7 +86,7 @@ q_nxtout ds.l     1          pointer to next location to take byte from
 q_queue  equ      *          start of queue
 
 
-version  SETSTR   3.00b2
+version  SETSTR   3.00b3
 
 * Variables
 
@@ -110,15 +124,24 @@ CURSAV   DS.W     2        Cursor position save area
 PB_PNT   DS.W     1
 FNAM_OFS DS.W     1        Offset of real file name in FNAMBUF
 BUFLEN   DS.W     1        BUFFER LENGTH (IN K)
-MODEMTYP DS.B     1        MODEM TYPE: 0 QMODEM, 1 MODAPTOR, 2 SER3
+MODEMTYP DS.B     1        OBSOLETE: MODEM TYPE: 0 QMODEM, 1 MODAPTOR, 2 SER3
+
 BAUD     DS.B     1        BAUD RATE: 0: 75, 1: 300 .. 10: 115200, 11: Hermes 1200/75
 BAUD_HER EQU      11
-PARITY   DS.B     1        PARITY: -1 NONE, 0 ODD, 1 EVEN, 2 MARK, 3 SPACE
+
+PARITY   DS.B     1        OBSOLETE: PARITY: -1 NONE, 0 ODD, 1 EVEN, 2 MARK, 3 SPACE
 ECHOMOD  DS.B     1        ECHO MODE: -1 FD, 0 HD, 1 LOCAL
 SCRMOD   DS.B     1        SCREEN MODE: -1 ASCII, 0 VT52, 1 ANSI
-COLRMOD  DS.B     1        COLOUR: 0 OFF, 1 ON
+
+COLRMOD  DS.B     1        Colour mode
+COL_MONO EQU      0        Monochrome mode (green, but bold in white)
+COL_QL4  EQU      1        QL 4-colours (solid)
+COL_QL8  EQU      2        QL 8-colours (emulated with stipples)
+COL_16   EQU      3        SMSQ/E 16 colour palette
+
 CONVLF   DS.B     1        CONVERT QDOS LF'S: 0 NO, 1 YES
 L_COOKED DS.B     1        LOG MODE: 0 RAW, 1 COOKED
+
 PORT     DS.B     1        Index for communication device
 P_STD    EQU      5        Highest number for standard devices
 P_SER1I  EQU      0
@@ -127,7 +150,8 @@ P_SER2I  EQU      2
 P_SER2H  EQU      3
 P_CUSTOM EQU      4        Custom device (pre-configured)
 P_TCP    EQU      5        Raw TCP
-P_TELNET EQU      6        Telnet
+P_UDP    EQU      6        UDP
+P_TELNET EQU      7        Telnet
 
 ENTERKEY DS.B     1        Enter key: 0 sends CR, 1 LF, 2 CR+LF
 DELKEY   DS.B     1        Backspace key: 0 sends CTRL-H, 1 sends DEL
@@ -137,6 +161,7 @@ DLMOD    DS.B     1        Downloading?
 ESCMOD   DS.B     1        ESC received?
 PARNUM   DS.B     1        Number of parameters
 TXBUSY   DS.B     1        True when busy sending
+CALLNOW  DS.B     1        Set on startup to call from command line
 CONECTED DS.B     1        Connected?
 REDIR    DS.B     1        In/Output redirected
 USE_PIPE DS.B     1        True when using pipes
@@ -147,7 +172,11 @@ GOT_CMD  DS.B     1        Got Telnet command
 GOT_SUB  DS.B     1        Got Telnet suboption
 SUB_OPER DS.B     1        Suboption operator
 INV_VID  DS.B     1        Inverse video flag
+BOLDFLG  DS.B     1        Bold script flag
+BGCOLOUR DS.B     1        Background colour (ANSI 0-15)
+FGCOLOUR DS.B     1        Foreground colour (ANSI 0-15)
 DO_STAT  DS.B     1        Display status line or not
+ADEBUG   DS.B     1        Enable ANSI debugging
 CONF_VAR DS.W     0        word boundary
 CONF_BIN DS.B     1        Confirmed Telnet binary transmission option
 CONF_ECH DS.B     1        Confirmed Telnet echo option
@@ -165,7 +194,7 @@ PARBUF   DS.B     80       ESC sequence parameter buffer
 XMBLKTYP DS.B     1        X/Ymodem block type (SOH/STX)
 TXMODBUF DS.B     1024+4   Buffer for X/YMODEM (blknum+~blknum+data+CRC)
          DS.W     0
-VARS_END EQU      *        End of variables
+VARS_END EQU      *        End of variables (and start of scrap buffer)
 ; RXQ      DS.B     RXQ_SIZE RX queue
 
          DATA     2048

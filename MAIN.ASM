@@ -36,7 +36,7 @@
          XDEF     DIS_TRA
 
          XREF     SERJOB,SCRJOB,DOWNLOAD,UPLOAD,GR_SET1,OPEN_DEF,OF_ASK
-         XREF     TXCHR,TXCHR_A,TXSTR,RXCHAR,PUT_RXQ,T_WAIT
+         XREF     TXCHR,TXCHR_A,TXSTR,RXCHAR,PUT_RXQ,T_WAIT,ARGPARSE
 
 * Print a message on the command window
 
@@ -69,7 +69,7 @@ DEFSCR   DC.B     1              FOR "ANSI TERMINAL"
 DEFCOLR  DC.B     -1             FOR "COLOUR AUTO"
 DEFCONLF DC.B     1              FOR "CONVERT LINEFEEDS"
 DEFCOOKD DC.B     1              FOR "COOKED LOG"
-DEFPORT  DC.B     P_TELNET
+DEFPORT  DC.B     P_SER2H
 
 * !!! DO NOT CHANGE THE DS.B BETWEEN THE FOLLOWING ENTRIES!
 
@@ -137,6 +137,7 @@ CFG_VER  EQU      '3.00'
          
          mkcfhead {Modem settings},{CFG_VER}
 
+CFG_BAUD:
           mkcfitem 'QLT9',code,'B',DEFBAUD,,,\
           {Default baud rate}\
           0,0,{NONE},1,1,{300},2,2,{600},3,3,{1200},4,4,{2400},5,5,{4800},\
@@ -164,7 +165,7 @@ CFG_VER  EQU      '3.00'
           mkcfitem 'QLT8',word,'D',DEFBUFLN,,,\
           {Download buffer size (KB, not for RAMdisk)},0,64
                     
-          mkcfitem 'QLTA',code,'E',DEFECHO,,,\
+CFG_ECHO  mkcfitem 'QLTA',code,'E',DEFECHO,,,\
           {Default Local Echo setting}\
           -1,0,{Echo Off},0,1,{Echo On},1,L,{Local Only}
           
@@ -174,7 +175,7 @@ CFG_VER  EQU      '3.00'
           
           mkcfitem 'QLTC',code,'C',DEFCOLR,,,\
           {Default colour display}\
-          -1,B,{Automatic},0,4,{4-colour},1,8,{8-colour}
+          -1,B,{Automatic},0,0,{4-colour},1,1,{8-colour (emulated)},2,2,{16-colour}
 
           mkcfitem 'QLTP',code,0,DEFENTER,,,\
           {ENTER key sends}\
@@ -195,10 +196,11 @@ CFG_VER  EQU      '3.00'
           mkcfitem 'QLTF',code,'L',DEFCOOKD,,,\
           {Default logging}\
           0,R,{Raw},1,C,{Cooked}
-          
+
+CFG_COM:          
           mkcfitem 'QLTG',code,'S',DEFPORT,,,\
           {Default communication device}\
-          0,0,{SER1I},1,1,{SER1H},2,2,{SER2I},3,3,{SER2H},4,4,{RAW TCP},5,5,{Telnet},6,6,{Custom}
+          0,0,{SER1I},1,1,{SER1H},2,2,{SER2I},3,3,{SER2H},4,4,{Custom},5,5,{TCP},6,6,{UDP},7,7,{Telnet}
           
           mkcfitem 'QLTH',string,0,CUST_CFG,,,\
           {Custom communication device},cfs.sspc
@@ -225,7 +227,7 @@ WIN_TLX  DC.W     14                ; Window top left corner X
 WIN_TLY  DC.W     2                 ; Window top left corner Y
 WIN_WID  DC.W     80                ; Window width in characters
 WIN_HGT  DC.W     24                ; Window height in characters
-DEFRXBUF DC.W     64                ; Receive buffer size
+DEFRXBUF DC.W     4                 ; Receive buffer size
 DLDIR_CF DC.W     48                ; Maximum length
          STRING$  'RAM2_'           ; Download directory
          DCB.B    0,48+4-(*-DLDIR_CF)
@@ -248,6 +250,19 @@ CMDWINP  DC.B     2,1,0,7           ; command/status window colours
          DC.W     484,12,14,244     ; ... and size & position
 DEFGWIN  DC.B     0,0,0,7           ; Default window outline
          DC.W     484,254,14,2
+         
+OPTLIST  DC.B     ARG.CONF,'b'
+         DC.W     CFG_BAUD-*,BAUD
+         DC.B     ARG.CONF,'c'
+         DC.W     CFG_COM-*,PORT
+         DC.B     48,'d'
+         DC.W     0,COMNAME
+         DC.B     ARG.TRUE,'0'
+         DC.W     0,ADEBUG
+         DC.B     38,0
+         DC.W     0,HOSTNAME
+         DC.B     0,0
+         
 ; GWINNAM  STRING$  'SCR_484X254A014X002'
 START:   ADDA.L   A6,A5             ; A5 = end of data space
          ADDA.L   A4,A6             ; A6 = start of data space
@@ -302,14 +317,18 @@ EX_ERR   SUBA.L   A0,A0
          PRINT    {'Too many files specified in EX/EW command',LF}
          BRA      QUIT2
 
-TSTCMD   MOVE.L   A7,A4             ; A4 now points to command string
-         MOVE.W   (A4)+,D0          ; is it null?
-         BEQ.S    SETRCVBF          ; yes, skip it
-         LEA      COMNAME(A6),A0
-         MOVE.W   D0,(A0)+          ; set length
-COMM_CP  MOVE.W   (A4)+,(A0)+       ; copy comms device name
-         SUBQ.W   #2,D0             ; 2 bytes at a time
-         BGT      COMM_CP
+TSTCMD:  MOVE.L   A7,A1
+         LEA      OPTLIST,A2
+         JSR      ARGPARSE
+         BNE      QUIT2
+;         MOVE.L   A7,A4             ; A4 now points to command string
+;         MOVE.W   (A4)+,D0          ; is it null?
+;         BEQ.S    SETRCVBF          ; yes, skip it
+;         LEA      COMNAME(A6),A0
+;         MOVE.W   D0,(A0)+          ; set length
+;COMM_CP  MOVE.W   (A4)+,(A0)+       ; copy comms device name
+;         SUBQ.W   #2,D0             ; 2 bytes at a time
+;         BGT      COMM_CP
 
 * Removed this, just print a warning when comms device cannot be opened
          
@@ -357,26 +376,25 @@ SETRCVBF MOVE.W   DEFRXBUF(PC),D1
             PRINT    {'Sorry, this program cannot be run in MODE 8',LF}
             BRA      QUIT2
          ENDIF
-         TST.B    COLRMOD(A6)
-         BGE.S    OPEN_WIN          ; pre-set colour mode, skip autodetect
-         CLR.B    COLRMOD(A6)       ; assume Black & White
+         ADDQ.B   #1,COLRMOD(A6)    ; -1 now goes to 0 etc.
+         BNE.S    OPEN_WIN          ; pre-set colour mode, skip autodetect
          CMPI.B   #2,D1             ; test for 2-colour mode (SMS)
-         BEQ.S    OPEN_WIN
-         ADDQ.B   #1,COLRMOD(A6)    ; we have at least 4 colours available
+         BEQ.S    OPEN_WIN          ; yes, use monochrome mode
+         ADDQ.B   #COL_QL4,COLRMOD(A6) ; set QL 4-colour mode
          TST.B    D1                ; zero means MODE 4
          BEQ.S    OPEN_WIN
-         ADDQ.B   #1,COLRMOD(A6)    ; we're lucky - more than 4 colours
+         ADDQ.B   #COL_16-COL_QL4,COLRMOD(A6) ; we're lucky - 16 colours!
 
 * Open windows
 
 OPEN_WIN: 
          MOVE.L   WIN_TLX(PC),-(A7) ; stack window top left X & Y
          MOVE.W   WIN_HGT(PC),D0
-         MULU     #10,D0            ; Get pixels (NB: fails with NTSC QLs!)
-         ADD.W    #10+4,D0          ; add status line height+border (4x 1 px)
+         MULU     #YINC,D0          ; Get pixels (NB: fails with NTSC QLs!)
+         ADD.W    #YINC+4,D0        ; add status line height+border (4x 1 px)
          MOVE.W   D0,-(A7)
          MOVE.W   WIN_WID(PC),D0
-         MULU     #6,D0             ; Get width in pixels
+         MULU     #XINC,D0          ; Get width in pixels
          ADDQ.W   #4,D0             ; add border (2x 2 px)
          MOVE.W   D0,-(A7)
          MOVE.L   DEFGWIN(PC),-(A7) ; Border colour, size, paper & strip
@@ -396,7 +414,7 @@ GUARD_OK
 ;         MOVEQ    #-1,D3
 ;         QDOS     SD.CLEAR
          MOVE.L   MAINWINP(PC),(A7) ; border, paper & ink
-         SUB.W    #12,6(A7)         ; subtract cmd window height
+         SUB.W    #YINC+2,6(A7)     ; subtract cmd window height
          MOVE.L   A7,A1
          MOVE.W   UT_CON,A2
          JSR      (A2)              ; open main window
@@ -425,8 +443,9 @@ GUARD_OK
             ENDIF
          ENDIF
          MOVE.L   CMDWINP(PC),(A7)  ; border, paper & ink for cmdwin
-         MOVE.W   6(A7),10(A7)      ; cmd window comes under main window
-         ADDQ.W   #2,10(A7)         ; but allow for border
+         MOVE.W   6(A7),D0
+         ADD.W    D0,10(A7)         ; cmd window comes under main window
+;         ADDQ.W   #2,10(A7)         ; but allow for border
          MOVE.W   #12,6(A7)         ; height = 1 char + border
          MOVE.L   A7,A1
          MOVE.W   UT_CON,A2
@@ -478,6 +497,11 @@ MAIN_MSG MOVE.L   MAINWIN(A6),A0    ; get main window ID
          TST.B    DO_STAT(A6)       ; redisplay status line?
          BEQ.S    MAIN_LP           ; no, wait for key press
          BSR      STATUS            ; else, display status
+         TAS      CALLNOW(A6)       ; do this only once
+         BNE.S    MAIN_LP
+         TST.W    HOSTNAME(A6)      ; host name specified at startup?
+         BEQ.S    MAIN_LP           ; no
+         BSR      CALL_2B           ; connect now
 
 * Main execution loop
 
@@ -491,12 +515,11 @@ MAIN_LP: MOVE.L   MAINWIN(A6),A0
          TST.B    IN_EOF(A6)        ; test EOF flag
          BEQ      MAIN_LP           ; not EOF so loop back
 
-MAIN_EOF MOVEQ    #ERR.EF,D3        ; EOF in input detected
-         TST.B    USE_PIPE(A6)
-         BNE      QUIT2             ; if redirected, commit suicide now
+MAIN_EOF: 
          TST.W    TSERIN+2(A6)      ; input channel already closed?
-         BMI      MAIN_LP           ; yes, loop back
-         BSR      DC_CLOSE          ; close input channel
+         BMI      MAIN_LP           ; yes, wait for exit 
+         BSR      DC_CLOSE          ; close input channel if possible,
+                                    ; reset TSERIN
          MOVE.L   MAINWIN(A6),A0
          MOVE.B   WIN_DPAP(PC),D1   ; reset colours to default
          QDOS     SD.SETPA
@@ -504,6 +527,10 @@ MAIN_EOF MOVEQ    #ERR.EF,D3        ; EOF in input detected
          MOVE.B   WIN_DINK(PC),D1
          QDOS     SD.SETIN
          PRINT    {LF,LF,'*** Session disconnected by remote ***',LF,LF}
+         TST.B    REDIR(A6)
+         IF NE THEN
+            PRINT    {'Press SHIFT-ENTER to exit',LF}
+         ENDIF
 ;         MOVE.L   SERNAME(A6),A0
 ;         MOVE.L   A0,D0             ; do we have a serial device?
 ;         BEQ      QUIT2             ; no, quit
@@ -543,7 +570,9 @@ CMD_END  SF       DLMOD(A6)         ; return from cmd, enable terminal
 
 * 'Ordinary' key press - look for generic conversion first
 
-KEY2     TAS      DO_STAT(A6)       ; Need to display status line now?
+KEY2     CMPI.B   #$FE,D1           ; SHIFT-ENTER
+         BEQ      QUIT              ; quit immediately
+         TAS      DO_STAT(A6)       ; Need to display status line now?
          IF EQ THEN
             BSR      STATUS         ; it's only needed after down/upload
          ENDIF
@@ -872,7 +901,7 @@ QUIT     TST.B    CONECTED(A6)
          QDOS     MT.PRIOR
          MOVE.L   GUARDWIN(A6),A0
          QDOS     SD.CLEAR
-QUIT2    MOVEQ    #0,D3
+QUIT2    MOVE.L   D0,D3             ; error exit
 QUIT3    MOVEQ    #-1,D1
          QDOS     MT.FRJOB
 
@@ -947,8 +976,11 @@ DISCON:  TST.B    USE_PIPE(A6)
          JSR      T_WAIT            ; and wait 1 second
          BRA.S    DC_RTS
 
-DC_CLOSE MOVE.L   TSERIN(A6),A0
-         QDOS     IO.CLOSE          ; close I/O channel
+DC_CLOSE TST.B    REDIR(A6)         ; input redirected?
+         IF EQ THEN                 ; do not close redirected channels
+            MOVE.L   TSERIN(A6),A0
+            QDOS     IO.CLOSE          ; close I/O channel
+         ENDIF
          MOVEQ    #-1,D1
          MOVE.L   D1,TSERIN(A6)     ; and reset channel IDs
          MOVE.L   D1,TSEROUT(A6)
@@ -989,7 +1021,7 @@ CALL_2   PRMSG    {'Enter phone number, hostname or IP address: '}
          CMPI.B   #ESC,-(A1)        ; ESC?
          BEQ      CALL_END
          SUBQ.W   #1,D1
-         BEQ.S    CONNECT           ; empty input, connect right away
+         BEQ      CONNECT           ; empty input, connect right away
          CMPI.B   #LF,(A1)          ; user terminated with ENTER?
          BEQ.S    CALL_2A           ; yes, go ahead
          CLR.W    HOSTNAME(A6)      ; else, clear hostname and ask again
@@ -997,7 +1029,7 @@ CALL_2   PRMSG    {'Enter phone number, hostname or IP address: '}
 
 CALL_2A  LEA      HOSTNAME(A6),A1
          MOVE.W   D1,(A1)+          ; save length
-         CMPI.B   #P_TCP,PORT(A6)
+CALL_2B  CMPI.B   #P_TCP,PORT(A6)
          BGE.S    CALL_TCP
          LEA      MDM_DPRE+2(PC),A1
          BSR      SENDCMD           ; pre-dial string ('ATD')
@@ -1008,9 +1040,15 @@ CALL_2A  LEA      HOSTNAME(A6),A1
          MOVEQ    #0,D0
          BRA.S    CALL_END          ; we'll assume no error
 CALL_TCP
-         LEA      COMNAME+2(A6),A0
-         MOVE.L   #'TCP_',(A0)+
+         MOVE.L   #'TCP_',D0        ; assume TCP (also TELNET)
+         CMPI.B   #P_UDP,PORT(A6)   ; UDP requested?
+         BNE.S    CALL_COM          ; no
+         MOVE.L   #'UDP_',D0        ; it's UDP
+CALL_COM LEA      COMNAME+2(A6),A0
+         MOVE.L   D0,(A0)+
          SF       D2                ; signal 'no port number yet'
+         LEA      HOSTNAME(A6),A1   ; get hostname again
+         MOVE.W   (A1)+,D1          ; length
 CALL_LP  CMPI.B   #':',(A1)         ; port number specified?
          BNE.S    CALL_CPY          ; not yet
          ST       D2                ; yes
@@ -1054,18 +1092,20 @@ ECHOMSG  DC.W     3
          STRING$  {' Echo On '}
          STRING$  {' Local Only '}
 
-COLRMSG  DC.W     3
+COLRMSG  DC.W     4
          STRING$  {' No colour '}
          STRING$  {' 4-Colour '}
-         STRING$  {' 8-Colour '}
+         STRING$  {' 8-Emulated '}
+         STRING$  {' 16-Colour '}
 
-PORTMSG  DC.W     7
+PORTMSG  DC.W     8
          STRING$  {' SER1I '}
          STRING$  {' SER1H '}
          STRING$  {' SER2I '}
          STRING$  {' SER2H '}
          STRING$  {' Custom '}
          STRING$  {' TCP '}
+         STRING$  {' UDP '}
          STRING$  {' Telnet '}
 
 BAUDMSG  DC.W     12
